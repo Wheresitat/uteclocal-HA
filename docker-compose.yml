@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: uteclocal-gateway
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persistent storage for config and logs
+      - uteclocal-data:/data
+    environment:
+      # Optional: Set timezone for accurate log timestamps
+      - TZ=UTC
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - uteclocal-network
+
+networks:
+  uteclocal-network:
+    driver: bridge
+
+volumes:
+  # Named volume for persistent data (config.json, logs)
+  uteclocal-data:
+    driver: local
