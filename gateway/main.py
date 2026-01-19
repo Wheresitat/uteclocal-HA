@@ -535,7 +535,7 @@ async def manual_refresh_token():
 
 @app.get("/api/devices")
 async def get_devices():
-    """Get list of devices"""
+    """Get list of devices - auto-detects correct API format"""
     try:
         api_url = config_data.get("api_base_url", "https://api.u-tec.com")
         action_path = config_data.get("action_path", "/action")
@@ -543,21 +543,73 @@ async def get_devices():
         
         logger.info(f"Fetching devices from: {endpoint}")
         
-        payload = {
-            "action": "Uhome.Device/Query",
-            "data": {}
-        }
+        # Check if we already know the working format
+        if config_data.get("working_device_query_action"):
+            payload = {
+                "action": config_data["working_device_query_action"],
+                "data": config_data.get("working_device_query_data", {})
+            }
+            logger.info(f"Using cached working format: {json.dumps(payload)}")
+        else:
+            # Try multiple formats until one works
+            payloads_to_try = [
+                # Format 1: GetAll (most common)
+                {"action": "Uhome.Device/GetAll", "data": {}},
+                # Format 2: Query with empty devices array
+                {"action": "Uhome.Device/Query", "data": {"devices": []}},
+                # Format 3: Just Query with empty data
+                {"action": "Uhome.Device/Query", "data": {}},
+                # Format 4: Without Uhome prefix
+                {"action": "Device.GetAll", "data": {}},
+                # Format 5: List action
+                {"action": "Uhome.Device/List", "data": {}},
+            ]
+            
+            last_error = None
+            
+            for i, test_payload in enumerate(payloads_to_try):
+                try:
+                    logger.info(f"Trying format {i+1}/{len(payloads_to_try)}: {json.dumps(test_payload)}")
+                    
+                    response = await make_authenticated_request("POST", endpoint, json_data=test_payload)
+                    
+                    logger.info(f"Format {i+1} response status: {response.status_code}")
+                    
+                    if response.status_code == 200:
+                        logger.info(f"✅ Success with format {i+1}! Caching this format.")
+                        # Cache the working format
+                        config_data["working_device_query_action"] = test_payload["action"]
+                        config_data["working_device_query_data"] = test_payload["data"]
+                        save_config()
+                        return response.json()
+                    else:
+                        last_error = f"Status {response.status_code}: {response.text[:200]}"
+                        logger.warning(f"Format {i+1} failed: {last_error}")
+                        
+                except Exception as e:
+                    last_error = str(e)
+                    logger.warning(f"Format {i+1} error: {last_error}")
+                    continue
+            
+            # All formats failed
+            error_msg = f"All API formats failed. Last error: {last_error}. Check logs for details."
+            logger.error(error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
         
-        logger.info(f"Request payload: {json.dumps(payload)}")
-        
+        # Use cached format
         response = await make_authenticated_request("POST", endpoint, json_data=payload)
         
         logger.info(f"Response status: {response.status_code}")
-        logger.info(f"Response body: {response.text[:500]}")  # Log first 500 chars
         
         if response.status_code == 200:
             return response.json()
         else:
+            # Cached format stopped working, clear it
+            logger.warning("Cached format failed, clearing cache")
+            config_data.pop("working_device_query_action", None)
+            config_data.pop("working_device_query_data", None)
+            save_config()
+            
             error_detail = f"API returned {response.status_code}: {response.text}"
             logger.error(error_detail)
             raise HTTPException(status_code=response.status_code, detail=error_detail)
@@ -568,6 +620,8 @@ async def get_devices():
     except httpx.RequestError as e:
         logger.error(f"Request error: {e}")
         raise HTTPException(status_code=503, detail=f"Unable to reach U-tec API: {str(e)}")
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         logger.error(f"Unexpected error getting devices: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
