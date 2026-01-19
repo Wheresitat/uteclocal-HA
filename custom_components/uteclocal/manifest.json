@@ -1,10 +1,12 @@
 {
   "domain": "uteclocal",
   "name": "U-tec Local Gateway",
-  "documentation": "https://github.com/Wheresitat/uteclocal-HA",
-  "requirements": [],
-  "codeowners": ["@Wheresitat"],
-  "version": "1.4.0",
+  "codeowners": [],
   "config_flow": true,
-  "iot_class": "local_polling"
+  "dependencies": [],
+  "documentation": "https://github.com/YOUR_USERNAME/uteclocal-HA",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "1.5.0"
 }
