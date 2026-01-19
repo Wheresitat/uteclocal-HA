@@ -218,12 +218,24 @@ async def make_authenticated_request(
         raise TokenRefreshError("Unable to obtain valid access token")
     
     # Prepare headers with authentication
-    request_headers = headers or {}
-    request_headers.update({
+    # NOTE: Using exact header format from original uteclocal
+    request_headers = {
+        "Content-Type": "application/json",
         "Authorization": f"Bearer {config_data['access_token']}",
-        "accessKey": config_data.get("access_key", ""),
-        "secretKey": config_data.get("secret_key", ""),
-    })
+    }
+    
+    # Add any additional headers
+    if headers:
+        request_headers.update(headers)
+    
+    # Add payload with accessKey and secretKey IN THE BODY, not headers
+    if json_data:
+        json_data["accessKey"] = config_data.get("access_key", "")
+        json_data["secretKey"] = config_data.get("secret_key", "")
+    
+    logger.info(f"Making {method} request to {url}")
+    logger.info(f"Headers: {', '.join(request_headers.keys())}")
+    logger.info(f"Payload keys: {list(json_data.keys()) if json_data else 'None'}")
     
     async with httpx.AsyncClient(timeout=30.0) as client:
         for attempt in range(max_retries + 1):
@@ -235,12 +247,20 @@ async def make_authenticated_request(
                 else:
                     raise ValueError(f"Unsupported HTTP method: {method}")
                 
+                logger.info(f"Response status: {response.status_code}")
+                logger.info(f"Response headers: {dict(response.headers)}")
+                if response.text:
+                    logger.info(f"Response body preview: {response.text[:200]}")
+                
                 # If we get 401, try refreshing token
                 if response.status_code == 401 and attempt < max_retries:
                     logger.warning(f"Got 401, attempting token refresh (attempt {attempt + 1})")
                     if await refresh_access_token():
-                        # Update headers with new token
+                        # Update token in payload
                         request_headers["Authorization"] = f"Bearer {config_data['access_token']}"
+                        if json_data:
+                            json_data["accessKey"] = config_data.get("access_key", "")
+                            json_data["secretKey"] = config_data.get("secret_key", "")
                         continue
                 
                 return response
