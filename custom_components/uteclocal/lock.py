@@ -80,28 +80,37 @@ class UtecLock(CoordinatorEntity, LockEntity):
         """Return true if lock is locked."""
         device_data = self.coordinator.data.get(self._device_id, {})
         
-        # Method 1: Try capabilities.st.lock.state.value
+        # Method 1: Parse states array (U-tec API format)
+        states = device_data.get("states", [])
+        if states:
+            for state in states:
+                if state.get("capability") == "st.lock" and state.get("name") == "lockState":
+                    lock_state = state.get("value", "").lower()
+                    _LOGGER.debug(f"Lock {self._device_id} state from states array: {lock_state}")
+                    return lock_state == "locked"
+        
+        # Method 2: Try capabilities.st.lock.state.value
         capabilities = device_data.get("capabilities", {})
         if "st.lock" in capabilities:
             lock_state = capabilities["st.lock"].get("state", {}).get("value")
             _LOGGER.debug(f"Lock {self._device_id} state from capabilities: {lock_state}")
             return lock_state == "locked"
         
-        # Method 2: Try state.locked field
+        # Method 3: Try state.locked field
         state = device_data.get("state")
         if state and "locked" in state:
             locked = state.get("locked", False)
             _LOGGER.debug(f"Lock {self._device_id} state from state.locked: {locked}")
             return locked
         
-        # Method 3: Try attributes or status fields
+        # Method 4: Try attributes or status fields
         attributes = device_data.get("attributes", {})
         if "lockState" in attributes:
             lock_state = attributes.get("lockState")
             _LOGGER.debug(f"Lock {self._device_id} state from attributes.lockState: {lock_state}")
-            return lock_state in ["locked", "LOCKED", 1, True]
+            return lock_state in ["locked", "LOCKED", "Locked", 1, True]
         
-        # Method 4: Check if there's a direct status field
+        # Method 5: Check if there's a direct status field
         status = device_data.get("status")
         if status:
             _LOGGER.debug(f"Lock {self._device_id} status field: {status}")
@@ -109,11 +118,11 @@ class UtecLock(CoordinatorEntity, LockEntity):
                 if "locked" in status:
                     return status["locked"]
                 if "lock" in status:
-                    return status["lock"] in ["locked", "LOCKED", 1, True]
+                    return status["lock"] in ["locked", "LOCKED", "Locked", 1, True]
             elif isinstance(status, str):
                 return status.lower() == "locked"
         
-        _LOGGER.warning(f"Could not determine lock state for {self._device_id}. Device data: {device_data.keys()}")
+        _LOGGER.warning(f"Could not determine lock state for {self._device_id}. Device data keys: {device_data.keys()}")
         return None
 
     @property
