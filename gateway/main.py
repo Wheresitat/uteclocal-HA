@@ -555,81 +555,37 @@ async def manual_refresh_token():
 
 @app.get("/api/devices")
 async def get_devices():
-    """Get list of devices - auto-detects correct API format"""
+    """Get list of devices using correct U-tec API format"""
     try:
+        import uuid
+        
         api_url = config_data.get("api_base_url", "https://api.u-tec.com")
         action_path = config_data.get("action_path", "/action")
         endpoint = f"{api_url}{action_path}"
         
         logger.info(f"Fetching devices from: {endpoint}")
         
-        # Check if we already know the working format
-        if config_data.get("working_device_query_action"):
-            payload = {
-                "action": config_data["working_device_query_action"],
-                "data": config_data.get("working_device_query_data", {})
-            }
-            logger.info(f"Using cached working format: {json.dumps(payload)}")
-        else:
-            # Try multiple formats until one works
-            payloads_to_try = [
-                # Format 1: GetAll (most common)
-                {"action": "Uhome.Device/GetAll", "data": {}},
-                # Format 2: Query with empty devices array
-                {"action": "Uhome.Device/Query", "data": {"devices": []}},
-                # Format 3: Just Query with empty data
-                {"action": "Uhome.Device/Query", "data": {}},
-                # Format 4: Without Uhome prefix
-                {"action": "Device.GetAll", "data": {}},
-                # Format 5: List action
-                {"action": "Uhome.Device/List", "data": {}},
-            ]
-            
-            last_error = None
-            
-            for i, test_payload in enumerate(payloads_to_try):
-                try:
-                    logger.info(f"Trying format {i+1}/{len(payloads_to_try)}: {json.dumps(test_payload)}")
-                    
-                    response = await make_authenticated_request("POST", endpoint, json_data=test_payload)
-                    
-                    logger.info(f"Format {i+1} response status: {response.status_code}")
-                    
-                    if response.status_code == 200:
-                        logger.info(f"✅ Success with format {i+1}! Caching this format.")
-                        # Cache the working format
-                        config_data["working_device_query_action"] = test_payload["action"]
-                        config_data["working_device_query_data"] = test_payload["data"]
-                        save_config()
-                        return response.json()
-                    else:
-                        last_error = f"Status {response.status_code}: {response.text[:200]}"
-                        logger.warning(f"Format {i+1} failed: {last_error}")
-                        
-                except Exception as e:
-                    last_error = str(e)
-                    logger.warning(f"Format {i+1} error: {last_error}")
-                    continue
-            
-            # All formats failed
-            error_msg = f"All API formats failed. Last error: {last_error}. Check logs for details."
-            logger.error(error_msg)
-            raise HTTPException(status_code=500, detail=error_msg)
+        # Use correct U-tec API format from documentation
+        payload = {
+            "header": {
+                "namespace": "Uhome.Device",
+                "name": "Discovery",
+                "messageId": str(uuid.uuid4()),
+                "payloadVersion": "1"
+            },
+            "payload": {}
+        }
         
-        # Use cached format
+        logger.info(f"Request payload: {json.dumps(payload)}")
+        
         response = await make_authenticated_request("POST", endpoint, json_data=payload)
         
         logger.info(f"Response status: {response.status_code}")
         
         if response.status_code == 200:
+            logger.info("✅ Successfully retrieved devices!")
             return response.json()
         else:
-            # Cached format stopped working, clear it
-            logger.warning("Cached format failed, clearing cache")
-            config_data.pop("working_device_query_action", None)
-            config_data.pop("working_device_query_data", None)
-            save_config()
-            
             error_detail = f"API returned {response.status_code}: {response.text}"
             logger.error(error_detail)
             raise HTTPException(status_code=response.status_code, detail=error_detail)
@@ -641,7 +597,7 @@ async def get_devices():
         logger.error(f"Request error: {e}")
         raise HTTPException(status_code=503, detail=f"Unable to reach U-tec API: {str(e)}")
     except HTTPException:
-        raise  # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
         logger.error(f"Unexpected error getting devices: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
@@ -649,8 +605,9 @@ async def get_devices():
 
 @app.post("/api/status")
 async def query_status(request: Request):
-    """Query device status"""
+    """Query device status using correct U-tec API format"""
     try:
+        import uuid
         body = await request.json()
         device_id = body.get("id")
         
@@ -662,8 +619,15 @@ async def query_status(request: Request):
         endpoint = f"{api_url}{action_path}"
         
         payload = {
-            "action": "Uhome.Device/Query",
-            "data": {"devices": [{"id": device_id}]}
+            "header": {
+                "namespace": "Uhome.Device",
+                "name": "Query",
+                "messageId": str(uuid.uuid4()),
+                "payloadVersion": "1"
+            },
+            "payload": {
+                "devices": [{"id": device_id}]
+            }
         }
         
         response = await make_authenticated_request("POST", endpoint, json_data=payload)
@@ -683,8 +647,9 @@ async def query_status(request: Request):
 @app.post("/api/lock")
 @app.post("/lock")
 async def lock_device(request: Request):
-    """Lock a device"""
+    """Lock a device using correct U-tec API format"""
     try:
+        import uuid
         body = await request.json()
         device_id = body.get("id")
         
@@ -695,10 +660,14 @@ async def lock_device(request: Request):
         action_path = config_data.get("action_path", "/action")
         endpoint = f"{api_url}{action_path}"
         
-        # Try standard payload first
         payload = {
-            "action": "Uhome.Device/Command",
-            "data": {
+            "header": {
+                "namespace": "Uhome.Device",
+                "name": "Command",
+                "messageId": str(uuid.uuid4()),
+                "payloadVersion": "1"
+            },
+            "payload": {
                 "id": device_id,
                 "capability": "st.lock",
                 "command": {
@@ -712,8 +681,6 @@ async def lock_device(request: Request):
         if response.status_code == 200:
             return response.json()
         else:
-            # Try fallback payloads...
-            logger.warning("Standard lock command failed, trying fallback...")
             raise HTTPException(status_code=response.status_code, detail=response.text)
     
     except TokenRefreshError as e:
@@ -726,10 +693,47 @@ async def lock_device(request: Request):
 @app.post("/api/unlock")
 @app.post("/unlock")
 async def unlock_device(request: Request):
-    """Unlock a device"""
+    """Unlock a device using correct U-tec API format"""
     try:
+        import uuid
         body = await request.json()
         device_id = body.get("id")
+        
+        if not device_id:
+            raise HTTPException(status_code=400, detail="Device ID required")
+        
+        api_url = config_data.get("api_base_url", "https://api.u-tec.com")
+        action_path = config_data.get("action_path", "/action")
+        endpoint = f"{api_url}{action_path}"
+        
+        payload = {
+            "header": {
+                "namespace": "Uhome.Device",
+                "name": "Command",
+                "messageId": str(uuid.uuid4()),
+                "payloadVersion": "1"
+            },
+            "payload": {
+                "id": device_id,
+                "capability": "st.lock",
+                "command": {
+                    "name": "unlock"
+                }
+            }
+        }
+        
+        response = await make_authenticated_request("POST", endpoint, json_data=payload)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+    
+    except TokenRefreshError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error unlocking device: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
         
         if not device_id:
             raise HTTPException(status_code=400, detail="Device ID required")
