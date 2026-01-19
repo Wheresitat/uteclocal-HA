@@ -1,6 +1,6 @@
 #!/bin/bash
-# Simple Docker Deployment Script for Enhanced U-tec Gateway
-# This script is specifically designed for Docker/Docker Compose deployments
+# U-tec Gateway Auto-Refresh Deployment Script
+# Optimized for uteclocal-HA repository structure
 
 set -e
 
@@ -29,13 +29,25 @@ if ! command -v docker compose &> /dev/null; then
     exit 1
 fi
 
+echo -e "${GREEN}✓ Docker and Docker Compose found${NC}"
+echo ""
+
+# Check if we're in the right directory
 if [ ! -f "docker-compose.yml" ]; then
     echo -e "${RED}Error: docker-compose.yml not found${NC}"
-    echo "Please run this script from the uteclocal directory"
+    echo "Please run this script from the uteclocal-HA directory"
     exit 1
 fi
 
-echo -e "${GREEN}✓ Docker and Docker Compose found${NC}"
+# Check if gateway/main.py exists
+if [ ! -f "gateway/main.py" ]; then
+    echo -e "${RED}Error: gateway/main.py not found${NC}"
+    echo "The repository structure may be incomplete."
+    echo "Please make sure you extracted the complete zip file."
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Repository structure verified${NC}"
 echo ""
 
 # Create backup
@@ -43,46 +55,32 @@ echo -e "${YELLOW}Creating backup...${NC}"
 BACKUP_DIR="backup_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
-if [ -f "gateway/main.py" ]; then
-    cp gateway/main.py "$BACKUP_DIR/"
-fi
-if [ -f "requirements.txt" ]; then
-    cp requirements.txt "$BACKUP_DIR/"
-fi
-if [ -f "docker-compose.yml" ]; then
-    cp docker-compose.yml "$BACKUP_DIR/"
-fi
-
 # Backup existing config from running container (if exists)
 if docker ps | grep -q uteclocal-gateway; then
     echo -e "${YELLOW}Backing up existing config from container...${NC}"
     docker cp uteclocal-gateway:/data/config.json "$BACKUP_DIR/config.json" 2>/dev/null || true
+    docker cp uteclocal-gateway:/data/gateway.log "$BACKUP_DIR/gateway.log" 2>/dev/null || true
     echo -e "${GREEN}✓ Config backed up${NC}"
+fi
+
+# Backup current files
+if [ -f "Dockerfile" ]; then
+    cp Dockerfile "$BACKUP_DIR/" 2>/dev/null || true
+fi
+if [ -f "docker-compose.yml" ]; then
+    cp docker-compose.yml "$BACKUP_DIR/" 2>/dev/null || true
 fi
 
 echo -e "${GREEN}✓ Backup created in $BACKUP_DIR${NC}"
 echo ""
 
-# Update files
-echo -e "${YELLOW}Updating gateway files...${NC}"
-
-# Check if enhanced files exist
-if [ ! -f "gateway_main_enhanced.py" ]; then
-    echo -e "${RED}Error: gateway_main_enhanced.py not found${NC}"
-    echo "Please place the enhanced gateway file in this directory"
-    exit 1
-fi
-
-# Copy enhanced gateway
-cp gateway_main_enhanced.py gateway/main.py
-echo -e "${GREEN}✓ Gateway code updated${NC}"
-
-# Update requirements.txt
+# Check if APScheduler is in requirements
+echo -e "${YELLOW}Checking dependencies...${NC}"
 if ! grep -q "APScheduler" requirements.txt 2>/dev/null; then
-    echo "APScheduler==3.10.4" >> requirements.txt
-    echo -e "${GREEN}✓ Added APScheduler to requirements${NC}"
+    echo -e "${YELLOW}Note: APScheduler not in requirements.txt${NC}"
+    echo -e "${YELLOW}It should already be there, but if build fails, this might be why${NC}"
 else
-    echo -e "${GREEN}✓ APScheduler already in requirements${NC}"
+    echo -e "${GREEN}✓ APScheduler found in requirements${NC}"
 fi
 echo ""
 
@@ -119,7 +117,6 @@ while [ $RETRIES -lt $MAX_RETRIES ]; do
     fi
     
     if docker compose -p uteclocal ps | grep -q "Up"; then
-        # Running but not healthy yet
         RETRIES=$((RETRIES + 1))
         if [ $((RETRIES % 5)) -eq 0 ]; then
             echo "  Still starting... ($RETRIES/$MAX_RETRIES)"
@@ -128,6 +125,8 @@ while [ $RETRIES -lt $MAX_RETRIES ]; do
     else
         echo -e "${RED}✗ Container is not running${NC}"
         docker compose -p uteclocal ps
+        echo ""
+        echo "View logs with: docker compose -p uteclocal logs gateway"
         exit 1
     fi
 done
@@ -195,22 +194,7 @@ echo ""
 echo "💾 Your config and tokens are stored in a Docker volume"
 echo "   and will persist across container restarts/rebuilds."
 echo ""
-echo "📖 For detailed Docker documentation, see:"
-echo "   DOCKER_DEPLOYMENT_GUIDE.md"
-echo ""
 echo "================================================"
-
-# Offer to open browser
-if command -v python3 &> /dev/null; then
-    read -p "Open gateway UI in browser? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        python3 -m webbrowser http://localhost:8000 2>/dev/null || \
-        xdg-open http://localhost:8000 2>/dev/null || \
-        open http://localhost:8000 2>/dev/null || \
-        echo "Please open http://localhost:8000 in your browser"
-    fi
-fi
 
 echo ""
 echo "Deployment completed successfully! 🎉"
