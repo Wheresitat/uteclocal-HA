@@ -660,6 +660,7 @@ async def lock_device(request: Request):
         action_path = config_data.get("action_path", "/action")
         endpoint = f"{api_url}{action_path}"
         
+        # Correct format from U-tec documentation
         payload = {
             "header": {
                 "namespace": "Uhome.Device",
@@ -668,11 +669,15 @@ async def lock_device(request: Request):
                 "payloadVersion": "1"
             },
             "payload": {
-                "id": device_id,
-                "capability": "st.lock",
-                "command": {
-                    "name": "lock"
-                }
+                "devices": [
+                    {
+                        "id": device_id,
+                        "command": {
+                            "capability": "st.lock",
+                            "name": "lock"
+                        }
+                    }
+                ]
             }
         }
         
@@ -698,6 +703,47 @@ async def unlock_device(request: Request):
         import uuid
         body = await request.json()
         device_id = body.get("id")
+        
+        if not device_id:
+            raise HTTPException(status_code=400, detail="Device ID required")
+        
+        api_url = config_data.get("api_base_url", "https://api.u-tec.com")
+        action_path = config_data.get("action_path", "/action")
+        endpoint = f"{api_url}{action_path}"
+        
+        # Correct format from U-tec documentation
+        payload = {
+            "header": {
+                "namespace": "Uhome.Device",
+                "name": "Command",
+                "messageId": str(uuid.uuid4()),
+                "payloadVersion": "1"
+            },
+            "payload": {
+                "devices": [
+                    {
+                        "id": device_id,
+                        "command": {
+                            "capability": "st.lock",
+                            "name": "unlock"
+                        }
+                    }
+                ]
+            }
+        }
+        
+        response = await make_authenticated_request("POST", endpoint, json_data=payload)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+    
+    except TokenRefreshError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error unlocking device: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
         
         if not device_id:
             raise HTTPException(status_code=400, detail="Device ID required")
