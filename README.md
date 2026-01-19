@@ -1,23 +1,17 @@
-# 🔐 U-tec Gateway with Automatic Token Refresh
+# 🔐 U-tec Local Gateway with Auto-Refresh
 
-Enhanced U-tec Local Gateway for Home Assistant with automatic OAuth token refresh and correct U-tec API integration.
+Enhanced U-tec Local Gateway for Home Assistant with automatic OAuth token refresh and complete Home Assistant integration.
 
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Home Assistant](https://img.shields.io/badge/home%20assistant-compatible-blue.svg)](https://www.home-assistant.io/)
+[![HACS](https://img.shields.io/badge/HACS-Compatible-brightgreen.svg)](https://github.com/hacs/integration)
 
 ---
 
-## 🌟 What This Solves
+## 🌟 Features
 
-**Problem:** U-tec tokens expire every few days, requiring manual re-authentication and Home Assistant reloads.
-
-**Solution:** Automatic token refresh monitors expiration and refreshes tokens in the background - **set it up once, never touch it again!**
-
----
-
-## ✨ Features
-
+### Gateway
 - ✅ **Automatic Token Refresh** - Tokens refresh 5 minutes before expiration
 - ✅ **Background Scheduler** - Monitors token status every 5 minutes
 - ✅ **Smart Retry Logic** - Auto-retries failed API calls with fresh tokens
@@ -25,164 +19,227 @@ Enhanced U-tec Local Gateway for Home Assistant with automatic OAuth token refre
 - ✅ **Correct U-tec API Format** - Uses official API structure (header/payload)
 - ✅ **Web-Based Setup UI** - Beautiful step-by-step OAuth configuration
 - ✅ **Device Control UI** - Test locks directly from web interface
-- ✅ **Home Assistant Ready** - Full integration support
-- ✅ **Comprehensive Logging** - Detailed logs for troubleshooting
+
+### Home Assistant Integration
+- ✅ **Lock Control** - Lock/unlock from Home Assistant
+- ✅ **Real-time Status** - Lock state updates every 30 seconds
+- ✅ **Battery Monitoring** - Track battery levels (0-100%)
+- ✅ **Health Check** - Online/Offline status sensor
+- ✅ **HACS Compatible** - Easy installation via HACS
+- ✅ **Automatic Updates** - Status refreshes after commands
+- ✅ **Device Info** - Proper device registry with manufacturer/model
+
+---
+
+## 🎯 What This Solves
+
+**Problem:** 
+- U-tec tokens expire every few days requiring manual re-authentication
+- No native Home Assistant integration
+- Complex API format requires custom gateway
+
+**Solution:** 
+- Set up OAuth once, tokens auto-refresh forever
+- Full Home Assistant integration with lock, battery, and status entities
+- Gateway handles all API communication
+
+---
+
+## 📋 Prerequisites
+
+- Docker & Docker Compose installed
+- U-tec API credentials (Access Key, Secret Key, Redirect URI)
+- U-tec account for authentication
+- Home Assistant (for integration)
 
 ---
 
 ## 🚀 Quick Start
 
-### Prerequisites
-
-- Docker & Docker Compose installed
-- U-tec API credentials (Access Key, Secret Key, Redirect URI)
-- U-tec account for authentication
-
-### Installation
+### Part 1: Deploy Gateway
 
 ```bash
-# Clone or download this repository
+# Clone repository
+git clone https://github.com/YOUR_USERNAME/uteclocal-HA.git
 cd uteclocal-HA
 
-# Make deploy script executable
-chmod +x deploy_docker.sh
-
 # Deploy gateway
+chmod +x deploy_docker.sh
 ./deploy_docker.sh
 
-# Open web interface
-open http://localhost:8000
+# Gateway runs on http://localhost:8000
+```
+
+### Part 2: Configure OAuth
+
+1. **Open:** `http://localhost:8000` (or `http://YOUR_SERVER_IP:8000`)
+
+2. **Step 1 - Enter Credentials:**
+   - Access Key (Client ID from U-tec Developer Portal)
+   - Secret Key (Client Secret)
+   - Redirect URI (callback URL)
+   - Click "💾 Save Configuration & Continue"
+
+3. **Step 2 - Authorize:**
+   - Click "🚀 Open U-tec Login Page"
+   - Login with U-tec username/password
+   - Click "Approve"
+
+4. **Step 3 - Exchange Code:**
+   - Copy the redirect URL from browser
+   - Paste into Step 3
+   - Click "🔑 Submit Code & Complete Setup"
+
+5. **Step 4 - Test:**
+   - Click "📱 View My Devices"
+   - Your locks appear!
+
+### Part 3: Install Home Assistant Integration
+
+#### Via HACS (Recommended)
+
+1. **HACS → Integrations → Custom Repositories**
+2. **Add:** `https://github.com/YOUR_USERNAME/uteclocal-HA`
+3. **Category:** Integration
+4. **Install** "U-tec Local Gateway"
+5. **Restart** Home Assistant
+
+#### Manual Installation
+
+```bash
+cd ~/.homeassistant/custom_components/
+git clone https://github.com/YOUR_USERNAME/uteclocal-HA.git
+cp -r uteclocal-HA/custom_components/uteclocal ./
+ha core restart
+```
+
+### Part 4: Add Integration to Home Assistant
+
+1. **Settings → Devices & Services → Add Integration**
+2. **Search:** "U-tec Local Gateway"
+3. **Enter Gateway URL:** `http://192.168.1.40:8000` (or your gateway IP)
+4. **Done!** Entities appear immediately
+
+---
+
+## 📱 Home Assistant Entities
+
+For each lock, you get:
+
+### Lock Entity
+```
+lock.office_door_lock
+State: Locked / Unlocked
+Actions: Lock, Unlock
+Updates: Every 30 seconds + after commands
+```
+
+### Battery Sensor
+```
+sensor.office_door_lock_battery
+State: 0-100%
+Conversion: 5→100%, 4→80%, 3→60%, 2→40%, 1→20%, 0→0%
+Device Class: battery
+Icon: Shows charge level
+```
+
+### Health Status Sensor
+```
+sensor.office_door_lock_status
+State: Online / Offline
+Icon: Changes based on status
+Updates: Every 30 seconds
 ```
 
 ---
 
-## 📋 First-Time Setup (5 Minutes)
+## 🎨 Example Automations
 
-### Step 1: Configure API Credentials
-
-Open `http://localhost:8000` (or `http://YOUR_SERVER_IP:8000`)
-
-Fill in **Step 1** with your U-tec credentials:
-
-| Field | Value | Where to Get It |
-|-------|-------|-----------------|
-| **Access Key** | Your Client ID | U-tec Developer Portal |
-| **Secret Key** | Your Client Secret | U-tec Developer Portal |
-| **Redirect URI** | Your callback URL | What you registered with U-tec |
-
-**Click "💾 Save Configuration & Continue"**
-
----
-
-### Step 2: Complete OAuth Authorization
-
-1. **Click "🚀 Open U-tec Login Page"**
-2. A new tab opens to U-tec's authorization page
-3. **Login** with your U-tec account username and password
-4. **Click "Approve"** to authorize access
-5. You'll be redirected to a page with a code in the URL
-
----
-
-### Step 3: Exchange Code for Tokens
-
-1. **Copy the entire URL** from your browser's address bar after authorization
-   - Example: `https://your-site.com/callback?code=abc123xyz...`
-2. **Paste** it into the text box in Step 3
-3. **Click "🔑 Submit Code & Complete Setup"**
-4. ✅ **Success!** Authentication complete
-
----
-
-### Step 4: Test Your Devices
-
-1. **Click "📱 View My Devices"**
-2. Your U-tec locks will be listed
-3. **Test the controls:**
-   - 🔒 Lock Device
-   - 🔓 Unlock Device
-   - 📊 Query Status
-
----
-
-## 🏠 Home Assistant Integration
-
-### Method 1: REST Integration (Simplest)
-
-Add to `configuration.yaml`:
-
+### Lock at Night
 ```yaml
-# Lock/Unlock Commands
-rest_command:
-  lock_front_door:
-    url: http://192.168.1.40:8000/api/lock
-    method: POST
-    content_type: 'application/json'
-    payload: '{"id":"XX:XX:XX:XX:XX:XX"}'
-  
-  unlock_front_door:
-    url: http://192.168.1.40:8000/api/unlock
-    method: POST
-    content_type: 'application/json'
-    payload: '{"id":"XX:XX:XX:XX:XX:XX"}'
-
-# Status Sensor
-sensor:
-  - platform: rest
-    name: "Front Door Lock Status"
-    resource: http://192.168.1.40:8000/api/status
-    method: POST
-    headers:
-      Content-Type: application/json
-    payload: '{"id":"XX:XX:XX:XX:XX:XX"}'
-    value_template: >
-      {{ value_json.payload.devices[0].capabilities['st.lock'].state.value }}
-    scan_interval: 30
-
-# Template Lock Entity
-lock:
-  - platform: template
-    name: "Front Door"
-    value_template: "{{ states('sensor.front_door_lock_status') == 'locked' }}"
-    lock:
-      service: rest_command.lock_front_door
-    unlock:
-      service: rest_command.unlock_front_door
+automation:
+  - alias: "Lock office at night"
+    trigger:
+      platform: time
+      at: "22:00:00"
+    condition:
+      - condition: state
+        entity_id: sensor.office_door_lock_status
+        state: "Online"
+    action:
+      - service: lock.lock
+        target:
+          entity_id: lock.office_door_lock
 ```
 
-Replace `XX:XX:XX:XX:XX:XX` with your actual device MAC address.
-
-**Restart Home Assistant**, then you'll have:
-- `lock.front_door` - Lock control
-- `sensor.front_door_lock_status` - Current status
-
----
-
-### Method 2: Custom Integration (If Available)
-
-Check if a custom integration exists:
-
-```bash
-# Look in the repository
-ls custom_components/uteclocal/
+### Low Battery Alert
+```yaml
+automation:
+  - alias: "Office lock low battery"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.office_door_lock_battery
+        below: 40
+    action:
+      - service: notify.mobile_app
+        data:
+          message: "Office door lock battery at {{ states('sensor.office_door_lock_battery') }}%"
 ```
 
-If present, copy to Home Assistant:
-
-```bash
-cp -r custom_components/uteclocal ~/.homeassistant/custom_components/
+### Offline Alert
+```yaml
+automation:
+  - alias: "Office lock offline"
+    trigger:
+      - platform: state
+        entity_id: sensor.office_door_lock_status
+        to: "Offline"
+        for: "00:05:00"
+    action:
+      - service: notify.mobile_app
+        data:
+          message: "Office door lock is offline! Check battery or connection."
 ```
 
-Then restart Home Assistant and add via UI:
-- Settings → Devices & Services → Add Integration
-- Search for "U-tec Local Gateway"
-- Configure with gateway URL: `http://192.168.1.40:8000`
+### Auto-Lock After Opening
+```yaml
+automation:
+  - alias: "Auto-lock after 5 minutes"
+    trigger:
+      - platform: state
+        entity_id: lock.office_door_lock
+        to: "unlocked"
+        for: "00:05:00"
+    action:
+      - service: lock.lock
+        target:
+          entity_id: lock.office_door_lock
+      - service: notify.mobile_app
+        data:
+          message: "Office door auto-locked after 5 minutes"
+```
 
 ---
 
 ## 🔧 Gateway API Endpoints
 
-The gateway provides these endpoints for Home Assistant:
+The gateway provides these endpoints:
+
+### Health Check
+```bash
+curl http://localhost:8000/health
+```
+
+Returns:
+```json
+{
+  "status": "ok",
+  "token_valid": true,
+  "auto_refresh_enabled": true,
+  "token_expires_at": "2026-01-26T02:55:23...",
+  "scheduler_running": true
+}
+```
 
 ### List All Devices
 ```bash
@@ -210,20 +267,9 @@ curl -X POST http://localhost:8000/api/status \
   -d '{"id":"XX:XX:XX:XX:XX:XX"}'
 ```
 
-### Health Check
+### Refresh Token Manually
 ```bash
-curl http://localhost:8000/health
-```
-
-Returns:
-```json
-{
-  "status": "ok",
-  "token_valid": true,
-  "auto_refresh_enabled": true,
-  "token_expires_at": "2026-01-26T02:55:23...",
-  "scheduler_running": true
-}
+curl -X POST http://localhost:8000/api/oauth/refresh
 ```
 
 ---
@@ -231,12 +277,12 @@ Returns:
 ## 🔄 How Auto-Refresh Works
 
 ### Background Monitoring
-- **Checks token every 5 minutes**
-- **Refreshes 5 minutes before expiration**
-- **Logs all refresh attempts**
+- Checks token every 5 minutes
+- Refreshes 5 minutes before expiration
+- Logs all refresh attempts
 
 ### Automatic Retry
-- If API call returns **401 (Unauthorized)**
+- If API call returns 401 (Unauthorized)
 - Gateway automatically refreshes token
 - Retries the request with new token
 
@@ -247,8 +293,8 @@ Returns:
 
 ### Example Logs
 ```
-2026-01-19 03:55:23 - Token will expire at: 2026-01-26 02:55:23
-2026-01-26 02:50:00 - Token expiring soon, attempting refresh...
+2026-01-19 03:55:23 - Token expires at: 2026-01-26 02:55:23
+2026-01-26 02:50:00 - Token expiring soon, refreshing...
 2026-01-26 02:50:01 - Token refreshed successfully
 2026-01-26 02:50:01 - New token expires at: 2026-02-02 02:50:01
 ```
@@ -257,7 +303,7 @@ Returns:
 
 ## 📊 Monitoring
 
-### View Logs
+### View Gateway Logs
 ```bash
 # All logs
 docker compose -p uteclocal logs gateway -f
@@ -281,11 +327,20 @@ curl http://localhost:8000/health | jq
 curl http://localhost:8000/api/config | jq '.token_expires_at'
 ```
 
-### Web UI
-- Open `http://localhost:8000`
-- View token status in Step 4
-- Check logs in Advanced Options
-- Monitor device responses
+### Home Assistant Logs
+```
+Settings → System → Logs
+Search: "uteclocal"
+```
+
+Enable debug logging:
+```yaml
+# configuration.yaml
+logger:
+  default: info
+  logs:
+    custom_components.uteclocal: debug
+```
 
 ---
 
@@ -296,11 +351,8 @@ curl http://localhost:8000/api/config | jq '.token_expires_at'
 ```bash
 cd uteclocal-HA
 
-# Pull latest changes (if using git)
+# Pull latest changes
 git pull origin main
-
-# Or copy new gateway file
-cp gateway_main_FINAL_FIXED.py gateway/main.py
 
 # Rebuild container
 docker compose -p uteclocal up -d --build
@@ -309,24 +361,29 @@ docker compose -p uteclocal up -d --build
 curl http://localhost:8000/health
 ```
 
-**Your config and tokens are preserved!** They're stored in a Docker volume.
+**Your config and tokens are preserved!**
+
+### Update Home Assistant Integration
+
+#### Via HACS:
+1. HACS → Integrations → U-tec Local Gateway → Redownload
+2. Restart Home Assistant
+
+#### Manually:
+```bash
+cd uteclocal-HA
+git pull origin main
+cp -r custom_components/uteclocal ~/.homeassistant/custom_components/
+ha core restart
+```
 
 ---
 
 ## 🆘 Troubleshooting
 
-### "HTTP 400" or Commands Not Working
+### Gateway Issues
 
-**Cause:** Using old gateway code with incorrect API format
-
-**Solution:**
-```bash
-# Make sure you have the latest version
-cp gateway_main_FINAL_FIXED.py gateway/main.py
-docker compose -p uteclocal up -d --build
-```
-
-### Token Expired Despite Auto-Refresh
+#### Token Expired Despite Auto-Refresh
 
 **Check if auto-refresh is enabled:**
 ```bash
@@ -344,7 +401,7 @@ docker compose -p uteclocal logs gateway | grep "refresh"
 curl -X POST http://localhost:8000/api/oauth/refresh
 ```
 
-### Container Not Starting
+#### Container Not Starting
 
 **Check logs:**
 ```bash
@@ -352,25 +409,71 @@ docker compose -p uteclocal logs gateway
 ```
 
 **Common issues:**
-- Port 8000 already in use → Change port in `docker-compose.yml`
+- Port 8000 in use → Change port in `docker-compose.yml`
 - Missing dependencies → Rebuild: `docker compose -p uteclocal up -d --build`
 
-### Home Assistant Can't Connect
+#### "HTTP 400" Errors
 
-**Test gateway is accessible:**
+**Cause:** Using old gateway code
+
+**Solution:**
 ```bash
-curl http://YOUR_GATEWAY_IP:8000/health
+cd uteclocal-HA
+git pull origin main
+cp gateway_main_FINAL_FIXED.py gateway/main.py
+docker compose -p uteclocal up -d --build
 ```
 
-**Check Home Assistant logs:**
-```
-Settings → System → Logs
-Search for: "uteclocal" or "rest_command"
+---
+
+### Home Assistant Issues
+
+#### No Entities Appear
+
+**Check integration installed:**
+```bash
+ls ~/.homeassistant/custom_components/uteclocal/
+# Should show: __init__.py, config_flow.py, lock.py, sensor.py, etc.
 ```
 
-**Verify MAC address format:**
-- Must be: `XX:XX:XX:XX:XX:XX` (uppercase, colons)
-- Get from gateway device list
+**Check gateway reachable:**
+```bash
+curl http://YOUR_GATEWAY_IP:8000/api/devices
+```
+
+**Enable debug logging:**
+```yaml
+logger:
+  logs:
+    custom_components.uteclocal: debug
+```
+
+Check logs: Settings → System → Logs → Search "uteclocal"
+
+#### Lock Status Not Updating
+
+**Wait 2-3 seconds** after locking/unlocking for status to refresh.
+
+**Check if API returns correct state:**
+```bash
+curl -X POST http://localhost:8000/api/status \
+  -H "Content-Type: application/json" \
+  -d '{"id":"YOUR:MAC:ADDRESS"}' | jq
+```
+
+**Verify coordinator updates:**
+Check logs for: `Lock states for ... : [... 'value': 'Locked']`
+
+#### Battery Shows "Unknown"
+
+**Check device status includes battery:**
+```bash
+curl -X POST http://localhost:8000/api/status \
+  -H "Content-Type: application/json" \
+  -d '{"id":"YOUR:MAC:ADDRESS"}' | jq '.payload.devices[0].states[] | select(.capability == "st.batteryLevel")'
+```
+
+Should return battery level (0-5).
 
 ---
 
@@ -389,8 +492,9 @@ In Docker volume `/data/config.json`:
 ✅ **DO:**
 - Use `.gitignore` to exclude `config.json`
 - Use Docker volumes for persistent storage
-- Restrict network access to gateway if exposed
+- Restrict network access to gateway if exposed externally
 - Rotate credentials periodically
+- Use HTTPS if exposing gateway to internet
 
 ❌ **DON'T:**
 - Commit `config.json` to version control
@@ -411,24 +515,29 @@ docker compose -p uteclocal restart gateway
 
 ---
 
-## 📁 File Structure
+## 📁 Repository Structure
 
 ```
 uteclocal-HA/
-├── gateway/
-│   ├── __init__.py
-│   └── main.py              # Enhanced gateway with auto-refresh
-├── custom_components/       # Home Assistant integration (if present)
+├── hacs.json                      # HACS configuration
+├── info.md                        # HACS info page
+├── README.md                      # This file
+├── custom_components/             # Home Assistant integration
 │   └── uteclocal/
-├── docs/                    # Documentation
-├── Dockerfile               # Docker image configuration
-├── docker-compose.yml       # Docker Compose setup
-├── .dockerignore
-├── .gitignore              # Protects config.json
-├── requirements.txt        # Python dependencies (includes APScheduler)
-├── deploy_docker.sh        # Automated installer
-├── test_gateway.sh         # Testing script
-└── README.md              # This file
+│       ├── __init__.py           # Coordinator
+│       ├── config_flow.py        # UI configuration
+│       ├── lock.py               # Lock entities
+│       ├── sensor.py             # Battery & health sensors
+│       ├── manifest.json         # Integration metadata
+│       └── strings.json          # UI text
+├── gateway/                       # Gateway code
+│   ├── __init__.py
+│   └── main.py                   # FastAPI gateway
+├── docker-compose.yml             # Docker Compose config
+├── Dockerfile                     # Docker image
+├── requirements.txt               # Python dependencies
+├── deploy_docker.sh               # Deployment script
+└── .gitignore                     # Protects sensitive files
 ```
 
 ---
@@ -449,21 +558,76 @@ Contributions welcome! Please:
 
 ### U-tec API Format
 
-This gateway uses the official U-tec API format:
+This gateway uses the official U-tec API format with header/payload structure:
 
+#### Device Discovery
 ```json
 {
   "header": {
     "namespace": "Uhome.Device",
-    "name": "Discovery|Query|Command",
+    "name": "Discovery",
+    "messageId": "uuid-v4",
+    "payloadVersion": "1"
+  },
+  "payload": {},
+  "accessKey": "your-access-key",
+  "secretKey": "your-secret-key"
+}
+```
+
+#### Device Command
+```json
+{
+  "header": {
+    "namespace": "Uhome.Device",
+    "name": "Command",
     "messageId": "uuid-v4",
     "payloadVersion": "1"
   },
   "payload": {
-    // Command-specific data
+    "devices": [
+      {
+        "id": "MAC:ADDRESS",
+        "command": {
+          "capability": "st.lock",
+          "name": "lock"
+        }
+      }
+    ]
   },
   "accessKey": "your-access-key",
   "secretKey": "your-secret-key"
+}
+```
+
+### Status Response Format
+
+```json
+{
+  "payload": {
+    "devices": [
+      {
+        "id": "MAC:ADDRESS",
+        "states": [
+          {
+            "capability": "st.healthCheck",
+            "name": "status",
+            "value": "Online"
+          },
+          {
+            "capability": "st.lock",
+            "name": "lockState",
+            "value": "Locked"
+          },
+          {
+            "capability": "st.batteryLevel",
+            "name": "level",
+            "value": 5
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -483,6 +647,7 @@ This gateway uses the official U-tec API format:
 - **APScheduler** - Background task scheduler
 - **pydantic** - Data validation
 - **uvicorn** - ASGI server
+- **python-docx** - Document creation (for gateway UI)
 
 ---
 
@@ -495,7 +660,7 @@ Same as original uteclocal project.
 ## 🙏 Credits
 
 - Original uteclocal concept by [Wheresitat](https://github.com/Wheresitat/uteclocal)
-- Enhanced with automatic token refresh
+- Enhanced with automatic token refresh and complete HA integration
 - U-tec API format based on official documentation: https://doc.api.u-tec.com/
 - Built for the Home Assistant community
 
@@ -503,8 +668,8 @@ Same as original uteclocal project.
 
 ## 📞 Support
 
-- **Issues:** Create an issue in this repository
-- **Discussions:** Use GitHub Discussions
+- **Issues:** [GitHub Issues](https://github.com/YOUR_USERNAME/uteclocal-HA/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/YOUR_USERNAME/uteclocal-HA/discussions)
 - **Documentation:** https://doc.api.u-tec.com/
 
 ---
@@ -516,23 +681,26 @@ Same as original uteclocal project.
 - ❌ Manual OAuth flow required
 - ❌ Home Assistant reload needed
 - ❌ Service interruptions
-- ❌ Wrong API format (action/data structure)
+- ❌ Wrong API format
+- ❌ No battery/health sensors
 
 ### After (Fully Automated)
 - ✅ Automatic token refresh
 - ✅ One-time OAuth setup
 - ✅ Zero maintenance required
 - ✅ Continuous operation
-- ✅ Correct API format (header/payload structure)
+- ✅ Correct API format (header/payload)
 - ✅ Beautiful web UI for setup and testing
+- ✅ Complete HA integration with lock, battery, and health entities
 - ✅ Device control interface
 - ✅ Comprehensive logging
+- ✅ HACS compatible
 
 ---
 
 ## 🎊 Enjoy Hassle-Free Smart Lock Control!
 
-Set it up once, never touch it again. The gateway handles everything automatically. 🔐✨
+Set it up once, never touch it again. The gateway and integration handle everything automatically. 🔐✨
 
 **Questions? Open an issue!**  
 **Working perfectly? Star the repository! ⭐**
@@ -541,4 +709,5 @@ Set it up once, never touch it again. The gateway handles everything automatical
 
 **Last Updated:** January 2026  
 **API Version:** U-tec API v1 (header/payload format)  
-**Gateway Version:** 1.5.0 (Auto-refresh + Correct API Format)
+**Gateway Version:** 1.5.0 (Auto-refresh + Correct API Format)  
+**Integration Version:** 1.5.0 (Lock + Battery + Health Check)
