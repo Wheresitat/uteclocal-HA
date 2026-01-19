@@ -541,23 +541,36 @@ async def get_devices():
         action_path = config_data.get("action_path", "/action")
         endpoint = f"{api_url}{action_path}"
         
+        logger.info(f"Fetching devices from: {endpoint}")
+        
         payload = {
             "action": "Uhome.Device/Query",
             "data": {}
         }
         
+        logger.info(f"Request payload: {json.dumps(payload)}")
+        
         response = await make_authenticated_request("POST", endpoint, json_data=payload)
+        
+        logger.info(f"Response status: {response.status_code}")
+        logger.info(f"Response body: {response.text[:500]}")  # Log first 500 chars
         
         if response.status_code == 200:
             return response.json()
         else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
+            error_detail = f"API returned {response.status_code}: {response.text}"
+            logger.error(error_detail)
+            raise HTTPException(status_code=response.status_code, detail=error_detail)
     
     except TokenRefreshError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        logger.error(f"Token refresh error: {e}")
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
+    except httpx.RequestError as e:
+        logger.error(f"Request error: {e}")
+        raise HTTPException(status_code=503, detail=f"Unable to reach U-tec API: {str(e)}")
     except Exception as e:
-        logger.error(f"Error getting devices: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error getting devices: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
 @app.post("/api/status")
@@ -1009,13 +1022,32 @@ Example: https://your-redirect-uri.com/callback?code=abc123xyz789..."></textarea
             <!-- Devices Section (hidden until setup complete) -->
             <div class="step hidden" id="devicesSection">
                 <div class="step-header">
-                    <div class="step-title">📱 Your Devices</div>
+                    <div class="step-title">📱 Device Management & Testing</div>
                 </div>
                 
+                <h3>List Devices</h3>
                 <button class="btn-primary" onclick="getDevices()">🔄 Refresh Device List</button>
-                <button class="btn-secondary" onclick="getStatus()">📊 Get Status</button>
                 
-                <pre id="output" style="margin-top: 15px;"></pre>
+                <pre id="deviceList" style="margin-top: 15px; max-height: 300px; overflow-y: auto;"></pre>
+                
+                <div id="deviceControls" class="hidden" style="margin-top: 30px;">
+                    <h3>Test Device Control</h3>
+                    <p class="step-description">
+                        Select a device and send commands to test the connection.
+                    </p>
+                    
+                    <label>Device MAC Address:</label>
+                    <input type="text" id="deviceMac" placeholder="XX:XX:XX:XX:XX:XX or select from list above">
+                    <small style="color: #6c757d;">Copy the MAC address from your device list above</small>
+                    
+                    <div style="margin-top: 15px;">
+                        <button class="btn-success" onclick="lockDevice()">🔒 Lock Device</button>
+                        <button class="btn-primary" onclick="unlockDevice()">🔓 Unlock Device</button>
+                        <button class="btn-secondary" onclick="queryDevice()">📊 Query Status</button>
+                    </div>
+                    
+                    <div id="commandResult" style="margin-top: 15px;"></div>
+                </div>
             </div>
             
             <!-- Advanced Section -->
@@ -1256,32 +1288,164 @@ Example: https://your-redirect-uri.com/callback?code=abc123xyz789..."></textarea
             }}
             
             async function getDevices() {{
-                const output = document.getElementById('output');
+                const output = document.getElementById('deviceList');
                 output.textContent = '⏳ Loading devices...';
                 
                 try {{
                     const response = await fetch('/api/devices');
                     
                     if (!response.ok) {{
-                        throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                        const errorText = await response.text();
+                        let errorData;
+                        try {{
+                            errorData = JSON.parse(errorText);
+                        }} catch(e) {{
+                            errorData = {{ detail: errorText }};
+                        }}
+                        throw new Error(errorData.detail || `HTTP ${{response.status}}: ${{response.statusText}}`);
                     }}
                     
                     const data = await response.json();
                     output.textContent = JSON.stringify(data, null, 2);
+                    
+                    // Try to extract device list and enable controls
+                    if (data && data.payload && data.payload.devices) {{
+                        document.getElementById('deviceControls').classList.remove('hidden');
+                        
+                        // Show simplified device list
+                        const devices = data.payload.devices;
+                        if (devices.length > 0) {{
+                            let deviceSummary = '\\n📱 Found ' + devices.length + ' device(s):\\n\\n';
+                            devices.forEach((device, index) => {{
+                                deviceSummary += `${{index + 1}}. ${{device.name || 'Unnamed Device'}}\\n`;
+                                deviceSummary += `   MAC: ${{device.id}}\\n`;
+                                deviceSummary += `   Type: ${{device.type || 'Unknown'}}\\n\\n`;
+                            }});
+                            output.textContent = deviceSummary + '\\nFull JSON:\\n' + JSON.stringify(data, null, 2);
+                            
+                            // Auto-fill first device MAC
+                            if (devices[0] && devices[0].id) {{
+                                document.getElementById('deviceMac').value = devices[0].id;
+                            }}
+                        }}
+                    }} else {{
+                        document.getElementById('deviceControls').classList.remove('hidden');
+                    }}
                 }} catch (error) {{
-                    output.textContent = `❌ Error loading devices: ${{error.message}}
+                    output.innerHTML = `<div class="status status-error">
+❌ Error loading devices: ${{error.message}}
 
-Make sure you completed the authentication in Steps 1-3 first!`;
+Possible causes:
+1. Authentication token may have expired
+2. API endpoint might be incorrect
+3. Network connectivity issue
+
+Try:
+- Click "Refresh Status" in Step 4
+- Check logs in Advanced Options
+- Manually refresh token
+
+Full error: ${{error.stack || error.message}}
+</div>`;
                 }}
             }}
             
-            async function getStatus() {{
+            async function lockDevice() {{
+                const mac = document.getElementById('deviceMac').value.trim();
+                const resultDiv = document.getElementById('commandResult');
+                
+                if (!mac) {{
+                    resultDiv.innerHTML = '<div class="status status-error">❌ Please enter a device MAC address</div>';
+                    return;
+                }}
+                
+                resultDiv.innerHTML = '<div class="status status-info">🔒 Sending lock command...</div>';
+                
                 try {{
-                    const response = await fetch('/api/status/latest');
+                    const response = await fetch('/api/lock', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ id: mac }})
+                    }});
+                    
                     const data = await response.json();
-                    document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+                    
+                    if (response.ok) {{
+                        resultDiv.innerHTML = `<div class="status status-success">
+✅ Lock command sent successfully!
+<pre>${{JSON.stringify(data, null, 2)}}</pre>
+</div>`;
+                    }} else {{
+                        throw new Error(data.detail || 'Lock command failed');
+                    }}
                 }} catch (error) {{
-                    document.getElementById('output').textContent = '❌ Error: ' + error.message;
+                    resultDiv.innerHTML = `<div class="status status-error">❌ Error: ${{error.message}}</div>`;
+                }}
+            }}
+            
+            async function unlockDevice() {{
+                const mac = document.getElementById('deviceMac').value.trim();
+                const resultDiv = document.getElementById('commandResult');
+                
+                if (!mac) {{
+                    resultDiv.innerHTML = '<div class="status status-error">❌ Please enter a device MAC address</div>';
+                    return;
+                }}
+                
+                resultDiv.innerHTML = '<div class="status status-info">🔓 Sending unlock command...</div>';
+                
+                try {{
+                    const response = await fetch('/api/unlock', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ id: mac }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {{
+                        resultDiv.innerHTML = `<div class="status status-success">
+✅ Unlock command sent successfully!
+<pre>${{JSON.stringify(data, null, 2)}}</pre>
+</div>`;
+                    }} else {{
+                        throw new Error(data.detail || 'Unlock command failed');
+                    }}
+                }} catch (error) {{
+                    resultDiv.innerHTML = `<div class="status status-error">❌ Error: ${{error.message}}</div>`;
+                }}
+            }}
+            
+            async function queryDevice() {{
+                const mac = document.getElementById('deviceMac').value.trim();
+                const resultDiv = document.getElementById('commandResult');
+                
+                if (!mac) {{
+                    resultDiv.innerHTML = '<div class="status status-error">❌ Please enter a device MAC address</div>';
+                    return;
+                }}
+                
+                resultDiv.innerHTML = '<div class="status status-info">📊 Querying device status...</div>';
+                
+                try {{
+                    const response = await fetch('/api/status', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ id: mac }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {{
+                        resultDiv.innerHTML = `<div class="status status-success">
+✅ Device status retrieved!
+<pre>${{JSON.stringify(data, null, 2)}}</pre>
+</div>`;
+                    }} else {{
+                        throw new Error(data.detail || 'Status query failed');
+                    }}
+                }} catch (error) {{
+                    resultDiv.innerHTML = `<div class="status status-error">❌ Error: ${{error.message}}</div>`;
                 }}
             }}
             
