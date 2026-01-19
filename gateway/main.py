@@ -397,6 +397,17 @@ async def update_config(config: ConfigUpdate):
     return {"status": "ok", "message": "Configuration updated"}
 
 
+@app.get("/api/test")
+async def test_endpoint():
+    """Simple test endpoint to verify API is working"""
+    return {
+        "status": "ok",
+        "message": "API is working",
+        "config_loaded": bool(config_data.get("access_key")),
+        "has_tokens": bool(config_data.get("access_token"))
+    }
+
+
 @app.get("/api/config")
 async def get_config():
     """Get current configuration (without sensitive data)"""
@@ -421,27 +432,43 @@ async def get_config():
 @app.get("/api/oauth/authorize-url")
 async def get_authorize_url():
     """Generate OAuth authorization URL"""
+    from urllib.parse import quote
+    
     oauth_url = config_data.get("oauth_base_url", "https://oauth.u-tec.com")
     client_id = config_data.get("access_key", "")
     redirect_uri = config_data.get("redirect_uri", "")
     scope = config_data.get("scope", "openapi")
     
-    if not client_id or not redirect_uri:
+    logger.info(f"Generating auth URL with client_id: {client_id[:10]}..., redirect_uri: {redirect_uri}")
+    
+    if not client_id:
         raise HTTPException(
             status_code=400,
-            detail="Please configure access_key and redirect_uri first"
+            detail="Please configure access_key (Client ID) first. Go to section 1 and save your configuration."
         )
+    
+    if not redirect_uri:
+        raise HTTPException(
+            status_code=400,
+            detail="Please configure redirect_uri first. Go to section 1 and save your configuration."
+        )
+    
+    # URL encode the parameters
+    encoded_redirect = quote(redirect_uri, safe='')
+    encoded_scope = quote(scope, safe='')
     
     # Build authorization URL
     auth_url = (
         f"{oauth_url}/authorize?"
         f"response_type=code&"
         f"client_id={client_id}&"
-        f"redirect_uri={redirect_uri}&"
-        f"scope={scope}"
+        f"redirect_uri={encoded_redirect}&"
+        f"scope={encoded_scope}"
     )
     
-    return {"url": auth_url}
+    logger.info(f"Generated auth URL: {auth_url}")
+    
+    return {"url": auth_url, "success": True}
 
 
 @app.post("/api/oauth/exchange")
@@ -709,140 +736,368 @@ async def root():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>U-tec Gateway with Auto-Refresh</title>
+        <title>U-tec Gateway Setup</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; max-width: 1200px; }}
-            .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }}
-            input, textarea, button {{ margin: 5px 0; padding: 8px; width: 100%; box-sizing: border-box; }}
-            input[type="checkbox"] {{ width: auto; }}
-            input[type="number"] {{ width: 100px; }}
-            button {{ cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; }}
-            button:hover {{ background: #0056b3; }}
-            button.secondary {{ background: #6c757d; }}
-            button.secondary:hover {{ background: #5a6268; }}
-            button.success {{ background: #28a745; }}
-            button.success:hover {{ background: #218838; }}
-            .status {{ padding: 10px; margin: 10px 0; border-radius: 3px; }}
-            .success {{ background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }}
-            .warning {{ background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }}
-            .error {{ background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }}
-            .info {{ background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }}
-            pre {{ background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto; }}
-            label {{ display: block; margin: 10px 0 5px 0; font-weight: bold; }}
-            .inline-label {{ display: inline; font-weight: normal; }}
-            .button-group {{ display: flex; gap: 10px; }}
-            .button-group button {{ width: auto; }}
-            textarea {{ font-family: monospace; min-height: 60px; }}
+            * {{ box-sizing: border-box; }}
+            body {{ 
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                background: #f5f7fa;
+                color: #333;
+            }}
+            .container {{ max-width: 900px; margin: 0 auto; }}
+            h1 {{ color: #2c3e50; margin-bottom: 10px; }}
+            .subtitle {{ color: #7f8c8d; margin-bottom: 30px; }}
+            .step {{ 
+                background: white;
+                margin: 20px 0;
+                padding: 25px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }}
+            .step-header {{
+                display: flex;
+                align-items: center;
+                margin-bottom: 15px;
+            }}
+            .step-number {{
+                background: #3498db;
+                color: white;
+                width: 36px;
+                height: 36px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-weight: bold;
+                margin-right: 12px;
+                flex-shrink: 0;
+            }}
+            .step-title {{ font-size: 20px; font-weight: 600; color: #2c3e50; }}
+            .step-description {{ 
+                color: #7f8c8d;
+                margin-bottom: 15px;
+                line-height: 1.6;
+            }}
+            .status {{ 
+                padding: 12px 16px;
+                border-radius: 6px;
+                margin: 15px 0;
+                border-left: 4px solid;
+            }}
+            .status-success {{ background: #d4edda; border-color: #28a745; color: #155724; }}
+            .status-error {{ background: #f8d7da; border-color: #dc3545; color: #721c24; }}
+            .status-warning {{ background: #fff3cd; border-color: #ffc107; color: #856404; }}
+            .status-info {{ background: #d1ecf1; border-color: #17a2b8; color: #0c5460; }}
+            button {{
+                padding: 12px 24px;
+                border: none;
+                border-radius: 6px;
+                font-size: 15px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: all 0.2s;
+                margin: 5px 5px 5px 0;
+            }}
+            button:hover {{ transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }}
+            .btn-primary {{ background: #3498db; color: white; }}
+            .btn-primary:hover {{ background: #2980b9; }}
+            .btn-success {{ background: #28a745; color: white; }}
+            .btn-success:hover {{ background: #218838; }}
+            .btn-secondary {{ background: #6c757d; color: white; }}
+            .btn-secondary:hover {{ background: #5a6268; }}
+            input, textarea {{
+                width: 100%;
+                padding: 10px 12px;
+                border: 2px solid #e1e8ed;
+                border-radius: 6px;
+                font-size: 14px;
+                margin: 8px 0;
+                transition: border-color 0.2s;
+            }}
+            input:focus, textarea:focus {{
+                outline: none;
+                border-color: #3498db;
+            }}
+            textarea {{ 
+                font-family: 'Courier New', monospace;
+                min-height: 80px;
+                resize: vertical;
+            }}
+            label {{ 
+                display: block;
+                font-weight: 500;
+                margin-top: 12px;
+                color: #2c3e50;
+            }}
+            .url-box {{
+                background: #f8f9fa;
+                padding: 15px;
+                border-radius: 6px;
+                margin: 15px 0;
+                border: 2px solid #e1e8ed;
+                word-break: break-all;
+            }}
+            .url-box a {{
+                color: #3498db;
+                text-decoration: none;
+                font-weight: 500;
+            }}
+            .url-box a:hover {{ text-decoration: underline; }}
+            pre {{
+                background: #2c3e50;
+                color: #ecf0f1;
+                padding: 15px;
+                border-radius: 6px;
+                overflow-x: auto;
+                font-size: 13px;
+            }}
+            .completed {{ opacity: 0.7; }}
+            .completed .step-number {{ background: #28a745; }}
+            .hidden {{ display: none; }}
+            .token-info {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 10px;
+                margin: 10px 0;
+            }}
+            .token-item {{
+                background: #f8f9fa;
+                padding: 10px;
+                border-radius: 4px;
+            }}
+            .token-label {{ font-size: 12px; color: #6c757d; }}
+            .token-value {{ font-weight: 600; color: #2c3e50; margin-top: 4px; }}
+            @media (max-width: 768px) {{
+                .token-info {{ grid-template-columns: 1fr; }}
+                button {{ width: 100%; margin: 5px 0; }}
+            }}
         </style>
     </head>
     <body>
-        <h1>🔐 U-tec Gateway with Auto-Refresh</h1>
-        
-        <div class="section">
-            <h2>1️⃣ API Configuration</h2>
-            <div class="info status">
-                <strong>First Time Setup:</strong> Enter your U-tec API credentials below, then complete the OAuth flow.
+        <div class="container">
+            <h1>🔐 U-tec Gateway Setup</h1>
+            <p class="subtitle">First-time setup & authentication - Follow these steps in order</p>
+            
+            <!-- STEP 1: Configuration -->
+            <div class="step" id="step1">
+                <div class="step-header">
+                    <div class="step-number">1</div>
+                    <div class="step-title">Enter Your Credentials</div>
+                </div>
+                <p class="step-description">
+                    Enter your U-tec API credentials. These are used to communicate with U-tec's servers.
+                </p>
+                
+                <label>Access Key (Client ID) <span style="color: #e74c3c;">*</span></label>
+                <input type="text" id="accessKey" value="{config_data.get('access_key', '')}" 
+                       placeholder="Enter your U-tec access key">
+                
+                <label>Secret Key (Client Secret) <span style="color: #e74c3c;">*</span></label>
+                <input type="password" id="secretKey" value="{config_data.get('secret_key', '')}" 
+                       placeholder="Enter your U-tec secret key">
+                
+                <label>Redirect URI <span style="color: #e74c3c;">*</span></label>
+                <input type="text" id="redirectUri" value="{config_data.get('redirect_uri', '')}" 
+                       placeholder="https://your-redirect-uri.com/callback">
+                <small style="color: #6c757d;">This must match what you registered with U-tec</small>
+                
+                <details style="margin-top: 15px;">
+                    <summary style="cursor: pointer; color: #3498db; font-weight: 500;">⚙️ Advanced Settings (usually don't need to change)</summary>
+                    <div style="margin-top: 15px;">
+                        <label>API Base URL</label>
+                        <input type="text" id="apiBaseUrl" value="{config_data.get('api_base_url', 'https://api.u-tec.com')}">
+                        
+                        <label>OAuth Base URL</label>
+                        <input type="text" id="oauthBaseUrl" value="{config_data.get('oauth_base_url', 'https://oauth.u-tec.com')}">
+                        
+                        <label>Scope</label>
+                        <input type="text" id="scope" value="{config_data.get('scope', 'openapi')}">
+                    </div>
+                </details>
+                
+                <button class="btn-success" onclick="saveConfig()" style="margin-top: 20px;">
+                    💾 Save Configuration & Continue
+                </button>
+                <div id="configStatus"></div>
             </div>
             
-            <label>API Base URL:</label>
-            <input type="text" id="apiBaseUrl" value="{config_data.get('api_base_url', 'https://api.u-tec.com')}" placeholder="https://api.u-tec.com">
-            
-            <label>OAuth Base URL:</label>
-            <input type="text" id="oauthBaseUrl" value="{config_data.get('oauth_base_url', 'https://oauth.u-tec.com')}" placeholder="https://oauth.u-tec.com">
-            
-            <label>Action Endpoint Path:</label>
-            <input type="text" id="actionPath" value="{config_data.get('action_path', '/action')}" placeholder="/action">
-            
-            <label>Access Key (Client ID):</label>
-            <input type="text" id="accessKey" value="{config_data.get('access_key', '')}" placeholder="Your access key">
-            
-            <label>Secret Key (Client Secret):</label>
-            <input type="password" id="secretKey" value="{config_data.get('secret_key', '')}" placeholder="Your secret key">
-            
-            <label>Scope:</label>
-            <input type="text" id="scope" value="{config_data.get('scope', 'openapi')}" placeholder="openapi">
-            
-            <label>Redirect URI:</label>
-            <input type="text" id="redirectUri" value="{config_data.get('redirect_uri', '')}" placeholder="https://your-redirect-url.com/callback">
-            
-            <div class="button-group">
-                <button class="success" onclick="saveConfig()">💾 Save Configuration</button>
-            </div>
-        </div>
-        
-        <div class="section">
-            <h2>2️⃣ OAuth Authorization</h2>
-            <div class="warning status">
-                <strong>Important:</strong> Save your configuration above first, then click "Start OAuth Flow" below.
+            <!-- STEP 2: Authorization -->
+            <div class="step" id="step2">
+                <div class="step-header">
+                    <div class="step-number">2</div>
+                    <div class="step-title">Authorize with U-tec</div>
+                </div>
+                <p class="step-description">
+                    Click the button below to open U-tec's login page. You'll login with your <strong>U-tec account username and password</strong> (not the API keys from step 1).
+                </p>
+                
+                <button class="btn-primary" onclick="startOAuth()">
+                    🚀 Open U-tec Login Page
+                </button>
+                
+                <div id="authUrlDisplay"></div>
             </div>
             
-            <div class="button-group">
-                <button onclick="startOAuth()">🚀 Start OAuth Flow</button>
-                <button class="secondary" onclick="getAuthUrl()">🔗 Get Auth URL Only</button>
+            <!-- STEP 3: Get Code -->
+            <div class="step" id="step3">
+                <div class="step-header">
+                    <div class="step-number">3</div>
+                    <div class="step-title">Copy the Redirect URL</div>
+                </div>
+                <p class="step-description">
+                    After logging in and approving, U-tec will redirect you to a new page. <strong>Copy the entire URL</strong> from your browser's address bar and paste it below.
+                </p>
+                
+                <div class="status status-info">
+                    <strong>💡 Example:</strong> The URL will look something like:<br>
+                    <code style="background: white; padding: 2px 6px; border-radius: 3px;">https://your-site.com/callback?code=abc123xyz789...</code>
+                </div>
+                
+                <label>Paste the full redirect URL here:</label>
+                <textarea id="redirectUrl" placeholder="Paste the entire URL from your browser's address bar here...
+
+Example: https://your-redirect-uri.com/callback?code=abc123xyz789..."></textarea>
+                
+                <button class="btn-success" onclick="extractAndExchangeCode()">
+                    🔑 Submit Code & Complete Setup
+                </button>
+                
+                <div id="tokenDisplay"></div>
             </div>
             
-            <div id="authUrlDisplay" style="margin-top: 10px;"></div>
-            
-            <label style="margin-top: 20px;">After authorizing, paste the full redirect URL here:</label>
-            <textarea id="redirectUrl" placeholder="Paste the full URL you were redirected to after authorization..."></textarea>
-            
-            <div class="button-group">
-                <button onclick="extractAndExchangeCode()">🔑 Extract Code & Get Tokens</button>
+            <!-- STEP 4: Done! -->
+            <div class="step completed hidden" id="step4">
+                <div class="step-header">
+                    <div class="step-number">✓</div>
+                    <div class="step-title">Setup Complete!</div>
+                </div>
+                
+                <div class="status status-success">
+                    <strong>🎉 Success!</strong> Your gateway is now authenticated and ready to use.
+                </div>
+                
+                <div class="token-info">
+                    <div class="token-item">
+                        <div class="token-label">Token Status</div>
+                        <div class="token-value" id="tokenStatus">{'✅ Valid' if not is_token_expired() else '❌ Expired'}</div>
+                    </div>
+                    <div class="token-item">
+                        <div class="token-label">Auto-Refresh</div>
+                        <div class="token-value">{'✅ Enabled' if config_data.get('auto_refresh_enabled', True) else '❌ Disabled'}</div>
+                    </div>
+                    <div class="token-item">
+                        <div class="token-label">Token Expires</div>
+                        <div class="token-value" id="tokenExpiry">{token_info}</div>
+                    </div>
+                    <div class="token-item">
+                        <div class="token-label">Next Refresh</div>
+                        <div class="token-value">Automatic</div>
+                    </div>
+                </div>
+                
+                <button class="btn-primary" onclick="showDevicesSection()">
+                    📱 View My Devices
+                </button>
+                <button class="btn-secondary" onclick="location.reload()">
+                    🔄 Refresh Status
+                </button>
             </div>
             
-            <div id="tokenDisplay" style="margin-top: 10px;"></div>
-        </div>
-        
-        <div class="section">
-            <h2>3️⃣ Token Status</h2>
-            <div class="status {'success' if not is_token_expired() else 'error'}">
-                <strong>Token Status:</strong> {'✅ Valid' if not is_token_expired() else '❌ Expired/Missing'}<br>
-                <strong>{token_info}</strong><br>
-                <strong>Auto-refresh:</strong> {'✅ Enabled' if config_data.get('auto_refresh_enabled') else '❌ Disabled'}
+            <!-- Devices Section (hidden until setup complete) -->
+            <div class="step hidden" id="devicesSection">
+                <div class="step-header">
+                    <div class="step-title">📱 Your Devices</div>
+                </div>
+                
+                <button class="btn-primary" onclick="getDevices()">🔄 Refresh Device List</button>
+                <button class="btn-secondary" onclick="getStatus()">📊 Get Status</button>
+                
+                <pre id="output" style="margin-top: 15px;"></pre>
             </div>
-            <div class="button-group">
-                <button onclick="refreshToken()">🔄 Manually Refresh Token</button>
-                <button onclick="checkHealth()">❤️ Check Health</button>
-            </div>
-        </div>
-        
-        <div class="section">
-            <h2>4️⃣ Auto-Refresh Settings</h2>
-            <label class="inline-label"><input type="checkbox" id="autoRefresh" {'checked' if config_data.get('auto_refresh_enabled', True) else ''}> Enable automatic token refresh</label><br>
-            <label>Refresh buffer (minutes): <input type="number" id="refreshBuffer" value="{config_data.get('refresh_buffer_minutes', 5)}" min="1" max="60"></label>
-            <button onclick="updateSettings()">💾 Save Settings</button>
-        </div>
-        
-        <div class="section">
-            <h2>5️⃣ Devices & Status</h2>
-            <div class="button-group">
-                <button onclick="getDevices()">📱 List Devices</button>
-                <button onclick="getStatus()">📊 Get Status</button>
-            </div>
-            <pre id="output"></pre>
-        </div>
-        
-        <div class="section">
-            <h2>📋 Logs</h2>
-            <div class="button-group">
-                <button onclick="getLogs()">📄 View Logs</button>
-                <button class="secondary" onclick="clearLogs()">🗑️ Clear Logs</button>
-            </div>
-            <pre id="logs" style="max-height: 300px; overflow-y: auto;"></pre>
+            
+            <!-- Advanced Section -->
+            <details style="margin-top: 20px;">
+                <summary style="cursor: pointer; font-weight: 600; color: #2c3e50; padding: 15px; background: white; border-radius: 8px;">
+                    🔧 Advanced Options
+                </summary>
+                <div style="background: white; padding: 20px; margin-top: 10px; border-radius: 8px;">
+                    <h3>Token Management</h3>
+                    <button class="btn-secondary" onclick="refreshToken()">🔄 Manually Refresh Token</button>
+                    <button class="btn-secondary" onclick="checkHealth()">❤️ Check Health</button>
+                    
+                    <h3 style="margin-top: 20px;">Auto-Refresh Settings</h3>
+                    <label style="display: inline-flex; align-items: center;">
+                        <input type="checkbox" id="autoRefresh" {'checked' if config_data.get('auto_refresh_enabled', True) else ''} 
+                               style="width: auto; margin-right: 8px;">
+                        Enable automatic token refresh
+                    </label>
+                    <br>
+                    <label style="margin-top: 10px;">
+                        Refresh buffer (minutes before expiry):
+                        <input type="number" id="refreshBuffer" value="{config_data.get('refresh_buffer_minutes', 5)}" 
+                               min="1" max="60" style="width: 100px; display: inline-block; margin-left: 10px;">
+                    </label>
+                    <br>
+                    <button class="btn-success" onclick="updateSettings()" style="margin-top: 10px;">💾 Save Settings</button>
+                    
+                    <h3 style="margin-top: 20px;">Logs</h3>
+                    <button class="btn-secondary" onclick="getLogs()">📄 View Logs</button>
+                    <button class="btn-secondary" onclick="clearLogs()">🗑️ Clear Logs</button>
+                    <pre id="logs" style="max-height: 300px; overflow-y: auto; margin-top: 10px;"></pre>
+                </div>
+            </details>
         </div>
         
         <script>
+            // Check if setup is complete on load
+            window.onload = function() {{
+                checkSetupStatus();
+            }};
+            
+            function checkSetupStatus() {{
+                fetch('/api/config')
+                    .then(r => r.json())
+                    .then(data => {{
+                        if (data.access_token && data.access_token !== '***') {{
+                            document.getElementById('step4').classList.remove('hidden');
+                            document.getElementById('step1').classList.add('completed');
+                            document.getElementById('step2').classList.add('completed');
+                            document.getElementById('step3').classList.add('completed');
+                        }}
+                    }})
+                    .catch(e => console.log('Status check:', e));
+            }}
+            
             async function saveConfig() {{
+                const statusDiv = document.getElementById('configStatus');
+                statusDiv.innerHTML = '<div class="status status-info">💾 Saving...</div>';
+                
                 try {{
                     const config = {{
                         api_base_url: document.getElementById('apiBaseUrl').value,
                         oauth_base_url: document.getElementById('oauthBaseUrl').value,
-                        action_path: document.getElementById('actionPath').value,
-                        access_key: document.getElementById('accessKey').value,
-                        secret_key: document.getElementById('secretKey').value,
+                        access_key: document.getElementById('accessKey').value.trim(),
+                        secret_key: document.getElementById('secretKey').value.trim(),
                         scope: document.getElementById('scope').value,
-                        redirect_uri: document.getElementById('redirectUri').value
+                        redirect_uri: document.getElementById('redirectUri').value.trim()
                     }};
+                    
+                    // Validate required fields
+                    if (!config.access_key) {{
+                        statusDiv.innerHTML = '<div class="status status-error">❌ Please enter your Access Key</div>';
+                        return;
+                    }}
+                    if (!config.secret_key) {{
+                        statusDiv.innerHTML = '<div class="status status-error">❌ Please enter your Secret Key</div>';
+                        return;
+                    }}
+                    if (!config.redirect_uri) {{
+                        statusDiv.innerHTML = '<div class="status status-error">❌ Please enter your Redirect URI</div>';
+                        return;
+                    }}
                     
                     const response = await fetch('/api/config', {{
                         method: 'POST',
@@ -850,69 +1105,97 @@ async def root():
                         body: JSON.stringify(config)
                     }});
                     
-                    const data = await response.json();
-                    alert('✅ Configuration saved! You can now start the OAuth flow.');
+                    if (response.ok) {{
+                        statusDiv.innerHTML = '<div class="status status-success">✅ Configuration saved! Now proceed to Step 2.</div>';
+                        document.getElementById('step1').classList.add('completed');
+                        setTimeout(() => {{
+                            document.getElementById('step2').scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                        }}, 1000);
+                    }} else {{
+                        statusDiv.innerHTML = '<div class="status status-error">❌ Failed to save configuration</div>';
+                    }}
                 }} catch (error) {{
-                    alert('❌ Error saving config: ' + error.message);
-                }}
-            }}
-            
-            async function getAuthUrl() {{
-                try {{
-                    const response = await fetch('/api/oauth/authorize-url');
-                    const data = await response.json();
-                    
-                    const display = document.getElementById('authUrlDisplay');
-                    display.innerHTML = `
-                        <div class="info status">
-                            <strong>Authorization URL:</strong><br>
-                            <a href="${{data.url}}" target="_blank">${{data.url}}</a><br>
-                            <small>Copy this URL or click to open in new tab</small>
-                        </div>
-                    `;
-                }} catch (error) {{
-                    alert('Error: ' + error.message);
+                    statusDiv.innerHTML = '<div class="status status-error">❌ Error: ' + error.message + '</div>';
                 }}
             }}
             
             async function startOAuth() {{
+                const display = document.getElementById('authUrlDisplay');
+                display.innerHTML = '<div class="status status-info">⏳ Generating authorization URL...</div>';
+                
                 try {{
                     const response = await fetch('/api/oauth/authorize-url');
+                    
+                    if (!response.ok) {{
+                        const error = await response.json();
+                        display.innerHTML = `<div class="status status-error">❌ ${{error.detail || 'Failed to generate URL'}}<br><br>Make sure you saved your configuration in Step 1 first!</div>`;
+                        return;
+                    }}
+                    
                     const data = await response.json();
                     
-                    // Show URL in page
-                    const display = document.getElementById('authUrlDisplay');
+                    // Show the URL and open it
                     display.innerHTML = `
-                        <div class="success status">
-                            <strong>✅ Opening authorization page...</strong><br>
-                            If it doesn't open, <a href="${{data.url}}" target="_blank">click here</a>
+                        <div class="status status-success">
+                            <strong>✅ Opening U-tec login page...</strong>
+                            <p>If it doesn't open automatically, <a href="${{data.url}}" target="_blank"><strong>click here</strong></a></p>
+                        </div>
+                        <div class="url-box">
+                            <strong>Authorization URL:</strong><br>
+                            <a href="${{data.url}}" target="_blank">${{data.url}}</a>
+                        </div>
+                        <div class="status status-info" style="margin-top: 15px;">
+                            <strong>📝 What to do next:</strong>
+                            <ol style="margin: 10px 0 0 20px; padding: 0;">
+                                <li>Login with your U-tec account username and password</li>
+                                <li>Click "Approve" or "Authorize"</li>
+                                <li>Copy the URL from your browser's address bar</li>
+                                <li>Paste it in Step 3 below</li>
+                            </ol>
                         </div>
                     `;
                     
                     // Open in new tab
                     window.open(data.url, '_blank');
                     
-                    alert('After authorizing, paste the redirect URL in the text box below and click "Extract Code & Get Tokens"');
+                    // Mark step 2 complete and scroll to step 3
+                    document.getElementById('step2').classList.add('completed');
+                    setTimeout(() => {{
+                        document.getElementById('step3').scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                    }}, 2000);
+                    
                 }} catch (error) {{
-                    alert('❌ Error: ' + error.message);
+                    display.innerHTML = `<div class="status status-error">❌ Error: ${{error.message}}</div>`;
                 }}
             }}
             
             async function extractAndExchangeCode() {{
+                const displayDiv = document.getElementById('tokenDisplay');
+                const redirectUrl = document.getElementById('redirectUrl').value.trim();
+                
+                if (!redirectUrl) {{
+                    displayDiv.innerHTML = '<div class="status status-error">❌ Please paste the redirect URL first!</div>';
+                    return;
+                }}
+                
+                displayDiv.innerHTML = '<div class="status status-info">⏳ Extracting code and getting tokens...</div>';
+                
                 try {{
-                    const redirectUrl = document.getElementById('redirectUrl').value.trim();
-                    
-                    if (!redirectUrl) {{
-                        alert('⚠️ Please paste the redirect URL first');
-                        return;
-                    }}
-                    
                     // Extract code from URL
                     const url = new URL(redirectUrl);
                     const code = url.searchParams.get('code');
                     
                     if (!code) {{
-                        alert('❌ No authorization code found in URL. Make sure you pasted the complete redirect URL.');
+                        displayDiv.innerHTML = `
+                            <div class="status status-error">
+                                ❌ No authorization code found in the URL.<br><br>
+                                Make sure you pasted the <strong>complete URL</strong> from your browser's address bar.<br><br>
+                                It should look like:<br>
+                                <code style="background: white; padding: 4px 8px; border-radius: 3px;">
+                                https://your-site.com/callback?code=abc123...
+                                </code>
+                            </div>
+                        `;
                         return;
                     }}
                     
@@ -926,26 +1209,79 @@ async def root():
                     const data = await response.json();
                     
                     if (response.ok) {{
-                        document.getElementById('tokenDisplay').innerHTML = `
-                            <div class="success status">
-                                <strong>✅ Success! Tokens obtained and saved.</strong><br>
-                                <small>Access Token: ***</small><br>
-                                <small>Refresh Token: ***</small><br>
-                                <small>You can now use "List Devices" to see your locks!</small>
+                        displayDiv.innerHTML = `
+                            <div class="status status-success">
+                                <strong>🎉 Success! Authentication complete!</strong><br>
+                                Your gateway is now connected to U-tec.<br>
+                                Tokens will automatically refresh every few hours.
                             </div>
                         `;
                         
-                        // Reload page to update token status
-                        setTimeout(() => location.reload(), 2000);
+                        // Show step 4 and mark step 3 complete
+                        document.getElementById('step3').classList.add('completed');
+                        document.getElementById('step4').classList.remove('hidden');
+                        
+                        // Scroll to completion
+                        setTimeout(() => {{
+                            document.getElementById('step4').scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                        }}, 1000);
+                        
+                        // Refresh status in 2 seconds
+                        setTimeout(() => {{
+                            checkSetupStatus();
+                        }}, 2000);
                     }} else {{
-                        throw new Error(data.detail || 'Token exchange failed');
+                        displayDiv.innerHTML = `
+                            <div class="status status-error">
+                                <strong>❌ Token exchange failed</strong><br>
+                                ${{data.detail || 'Unknown error'}}<br><br>
+                                Try the OAuth process again from Step 2.
+                            </div>
+                        `;
                     }}
                 }} catch (error) {{
-                    document.getElementById('tokenDisplay').innerHTML = `
-                        <div class="error status">
-                            <strong>❌ Error:</strong> ${{error.message}}
+                    displayDiv.innerHTML = `
+                        <div class="status status-error">
+                            <strong>❌ Error:</strong> ${{error.message}}<br><br>
+                            Make sure you pasted a valid URL.
                         </div>
                     `;
+                }}
+            }}
+            
+            function showDevicesSection() {{
+                document.getElementById('devicesSection').classList.remove('hidden');
+                document.getElementById('devicesSection').scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                getDevices();
+            }}
+            
+            async function getDevices() {{
+                const output = document.getElementById('output');
+                output.textContent = '⏳ Loading devices...';
+                
+                try {{
+                    const response = await fetch('/api/devices');
+                    
+                    if (!response.ok) {{
+                        throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                    }}
+                    
+                    const data = await response.json();
+                    output.textContent = JSON.stringify(data, null, 2);
+                }} catch (error) {{
+                    output.textContent = `❌ Error loading devices: ${{error.message}}
+
+Make sure you completed the authentication in Steps 1-3 first!`;
+                }}
+            }}
+            
+            async function getStatus() {{
+                try {{
+                    const response = await fetch('/api/status/latest');
+                    const data = await response.json();
+                    document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+                }} catch (error) {{
+                    document.getElementById('output').textContent = '❌ Error: ' + error.message;
                 }}
             }}
             
@@ -953,10 +1289,10 @@ async def root():
                 try {{
                     const response = await fetch('/api/oauth/refresh', {{ method: 'POST' }});
                     const data = await response.json();
-                    alert(data.message || 'Token refreshed!');
+                    alert('✅ ' + (data.message || 'Token refreshed successfully!'));
                     location.reload();
                 }} catch (error) {{
-                    alert('Error: ' + error.message);
+                    alert('❌ Error: ' + error.message);
                 }}
             }}
             
@@ -966,7 +1302,7 @@ async def root():
                     const data = await response.json();
                     alert(JSON.stringify(data, null, 2));
                 }} catch (error) {{
-                    alert('Error: ' + error.message);
+                    alert('❌ Error: ' + error.message);
                 }}
             }}
             
@@ -984,38 +1320,12 @@ async def root():
                         }})
                     }});
                     
-                    const data = await response.json();
-                    alert('Settings saved!');
-                    location.reload();
-                }} catch (error) {{
-                    alert('Error: ' + error.message);
-                }}
-            }}
-            
-            async function getDevices() {{
-                try {{
-                    document.getElementById('output').textContent = 'Loading...';
-                    const response = await fetch('/api/devices');
-                    
-                    if (!response.ok) {{
-                        const error = await response.text();
-                        throw new Error(`HTTP ${{response.status}}: ${{error}}`);
+                    if (response.ok) {{
+                        alert('✅ Settings saved!');
+                        location.reload();
                     }}
-                    
-                    const data = await response.json();
-                    document.getElementById('output').textContent = JSON.stringify(data, null, 2);
                 }} catch (error) {{
-                    document.getElementById('output').textContent = '❌ Error: ' + error.message + '\\n\\nMake sure you have completed OAuth authentication first!';
-                }}
-            }}
-            
-            async function getStatus() {{
-                try {{
-                    const response = await fetch('/api/status/latest');
-                    const data = await response.json();
-                    document.getElementById('output').textContent = JSON.stringify(data, null, 2);
-                }} catch (error) {{
-                    document.getElementById('output').textContent = 'Error: ' + error.message;
+                    alert('❌ Error: ' + error.message);
                 }}
             }}
             
@@ -1025,7 +1335,7 @@ async def root():
                     const logs = await response.text();
                     document.getElementById('logs').textContent = logs;
                 }} catch (error) {{
-                    document.getElementById('logs').textContent = 'Error: ' + error.message;
+                    document.getElementById('logs').textContent = '❌ Error: ' + error.message;
                 }}
             }}
             
@@ -1033,9 +1343,10 @@ async def root():
                 if (confirm('Clear all logs?')) {{
                     try {{
                         await fetch('/logs/clear', {{ method: 'POST' }});
-                        document.getElementById('logs').textContent = 'Logs cleared';
+                        document.getElementById('logs').textContent = '✅ Logs cleared';
+                        alert('✅ Logs cleared');
                     }} catch (error) {{
-                        alert('Error: ' + error.message);
+                        alert('❌ Error: ' + error.message);
                     }}
                 }}
             }}
