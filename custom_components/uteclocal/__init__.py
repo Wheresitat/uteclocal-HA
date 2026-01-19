@@ -107,7 +107,12 @@ class UtecDataUpdateCoordinator(DataUpdateCoordinator):
                                 device_info = device.copy()
                                 if "payload" in status_data and "devices" in status_data["payload"]:
                                     if status_data["payload"]["devices"]:
-                                        device_info.update(status_data["payload"]["devices"][0])
+                                        status_device = status_data["payload"]["devices"][0]
+                                        device_info.update(status_device)
+                                        _LOGGER.debug(f"Merged status for {device_id}. Has 'states': {'states' in device_info}")
+                                        if "states" in device_info:
+                                            lock_states = [s for s in device_info["states"] if s.get("capability") == "st.lock"]
+                                            _LOGGER.debug(f"Lock states for {device_id}: {lock_states}")
                                 
                                 devices[device_id] = device_info
                                 _LOGGER.info(f"Device {device_id} added to coordinator data")
@@ -134,6 +139,12 @@ class UtecDataUpdateCoordinator(DataUpdateCoordinator):
                 )
                 success = response.status == 200
                 _LOGGER.info(f"Lock command for {device_id}: {'success' if success else 'failed'}")
+                
+                # Wait a moment for the lock to update
+                if success:
+                    import asyncio
+                    await asyncio.sleep(2)
+                
                 return success
         except Exception as err:
             _LOGGER.error(f"Error locking device {device_id}: {err}")
@@ -150,6 +161,12 @@ class UtecDataUpdateCoordinator(DataUpdateCoordinator):
                 )
                 success = response.status == 200
                 _LOGGER.info(f"Unlock command for {device_id}: {'success' if success else 'failed'}")
+                
+                # Wait a moment for the lock to update
+                if success:
+                    import asyncio
+                    await asyncio.sleep(2)
+                
                 return success
         except Exception as err:
             _LOGGER.error(f"Error unlocking device {device_id}: {err}")
