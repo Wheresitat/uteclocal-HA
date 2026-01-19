@@ -24,9 +24,20 @@ async def async_setup_entry(
 
     entities = []
     for device_id, device_data in coordinator.data.items():
-        # Add battery sensor if available
+        # Add battery sensor if available in any format
         capabilities = device_data.get("capabilities", {})
-        if "st.battery" in capabilities:
+        attributes = device_data.get("attributes", {})
+        
+        # Check multiple battery field locations
+        has_battery = (
+            "st.battery" in capabilities or
+            "batteryLevel" in attributes or
+            "batteryLevelRange" in attributes or
+            "battery" in device_data
+        )
+        
+        if has_battery:
+            _LOGGER.info(f"Adding battery sensor for {device_id}")
             entities.append(UtecBatterySensor(coordinator, device_id, device_data))
 
     async_add_entities(entities)
@@ -65,13 +76,35 @@ class UtecBatterySensor(CoordinatorEntity, SensorEntity):
     def native_value(self) -> int | None:
         """Return the state of the sensor."""
         device_data = self.coordinator.data.get(self._device_id, {})
-        capabilities = device_data.get("capabilities", {})
         
+        # Method 1: capabilities.st.battery.state.value
+        capabilities = device_data.get("capabilities", {})
         if "st.battery" in capabilities:
             battery_level = capabilities["st.battery"].get("state", {}).get("value")
             if battery_level is not None:
                 return int(battery_level)
         
+        # Method 2: attributes.batteryLevel
+        attributes = device_data.get("attributes", {})
+        if "batteryLevel" in attributes:
+            battery_level = attributes.get("batteryLevel")
+            if battery_level is not None:
+                return int(battery_level)
+        
+        # Method 3: Direct battery field
+        if "battery" in device_data:
+            battery_level = device_data.get("battery")
+            if battery_level is not None:
+                return int(battery_level)
+        
+        # Method 4: status.battery
+        status = device_data.get("status", {})
+        if isinstance(status, dict) and "battery" in status:
+            battery_level = status.get("battery")
+            if battery_level is not None:
+                return int(battery_level)
+        
+        _LOGGER.debug(f"Could not find battery level for {self._device_id}")
         return None
 
     @property

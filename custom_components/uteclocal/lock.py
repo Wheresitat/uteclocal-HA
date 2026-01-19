@@ -28,11 +28,13 @@ async def async_setup_entry(
     
     entities = []
     for device_id, device_data in coordinator.data.items():
-        _LOGGER.info(f"Checking device {device_id}: type={device_data.get('type')}, capabilities={list(device_data.get('capabilities', {}).keys())}")
+        _LOGGER.info(f"Checking device {device_id}: category={device_data.get('category')}, handleType={device_data.get('handleType')}, type={device_data.get('type')}, capabilities={list(device_data.get('capabilities', {}).keys())}")
         
-        # Check if device is a lock
+        # Check if device is a lock - multiple detection methods
         is_lock = (
             device_data.get("type") == "lock" or
+            device_data.get("category") == "SmartLock" or
+            device_data.get("handleType") == "utec-lock" or
             "st.lock" in str(device_data.get("capabilities", {}))
         )
         
@@ -78,21 +80,40 @@ class UtecLock(CoordinatorEntity, LockEntity):
         """Return true if lock is locked."""
         device_data = self.coordinator.data.get(self._device_id, {})
         
-        # Try to get lock state from capabilities
+        # Method 1: Try capabilities.st.lock.state.value
         capabilities = device_data.get("capabilities", {})
         if "st.lock" in capabilities:
             lock_state = capabilities["st.lock"].get("state", {}).get("value")
             _LOGGER.debug(f"Lock {self._device_id} state from capabilities: {lock_state}")
             return lock_state == "locked"
         
-        # Fallback to state field
+        # Method 2: Try state.locked field
         state = device_data.get("state")
-        if state:
+        if state and "locked" in state:
             locked = state.get("locked", False)
-            _LOGGER.debug(f"Lock {self._device_id} state from state field: {locked}")
+            _LOGGER.debug(f"Lock {self._device_id} state from state.locked: {locked}")
             return locked
         
-        _LOGGER.warning(f"Could not determine lock state for {self._device_id}")
+        # Method 3: Try attributes or status fields
+        attributes = device_data.get("attributes", {})
+        if "lockState" in attributes:
+            lock_state = attributes.get("lockState")
+            _LOGGER.debug(f"Lock {self._device_id} state from attributes.lockState: {lock_state}")
+            return lock_state in ["locked", "LOCKED", 1, True]
+        
+        # Method 4: Check if there's a direct status field
+        status = device_data.get("status")
+        if status:
+            _LOGGER.debug(f"Lock {self._device_id} status field: {status}")
+            if isinstance(status, dict):
+                if "locked" in status:
+                    return status["locked"]
+                if "lock" in status:
+                    return status["lock"] in ["locked", "LOCKED", 1, True]
+            elif isinstance(status, str):
+                return status.lower() == "locked"
+        
+        _LOGGER.warning(f"Could not determine lock state for {self._device_id}. Device data: {device_data.keys()}")
         return None
 
     @property
