@@ -1,7 +1,8 @@
 {
   "name": "U-tec Local Gateway",
-  "hacs": "1.6.0",
+  "content_in_root": false,
+  "render_readme": true,
   "domains": ["lock", "sensor"],
-  "iot_class": "Local Polling",
-  "homeassistant": "2023.1.0"
+  "homeassistant": "2023.1.0",
+  "iot_class": "local_polling"
 }
