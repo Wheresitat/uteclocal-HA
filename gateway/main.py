@@ -1,10 +1,6 @@
 """
 Enhanced U-tec Gateway with Automatic Token Refresh
-This version includes:
-- Robust refresh_token preservation (prevents token dropping)
-- UTC-based expiration calculations to prevent timezone drift
-- Retried requests and error handling
-- Background refresh scheduler
+Full version with complete Web UI setup steps.
 """
 
 import json
@@ -38,14 +34,12 @@ DATA_DIR.mkdir(exist_ok=True)
 CONFIG_FILE = DATA_DIR / "config.json"
 LOG_FILE = DATA_DIR / "gateway.log"
 
-# Add file handler for persistent logs
 file_handler = logging.FileHandler(LOG_FILE)
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(file_handler)
 
 app = FastAPI(title="U-tec Local Gateway with Auto-Refresh")
 
-# Global configuration storage
 config_data = {
     "api_base_url": "https://api.u-tec.com",
     "oauth_base_url": "https://oauth.u-tec.com",
@@ -56,18 +50,16 @@ config_data = {
     "redirect_uri": "",
     "access_token": "",
     "refresh_token": "",
-    "token_expires_at": None,  # Store as ISO format string (UTC)
+    "token_expires_at": None,
     "status_poll_interval": 60,
     "auto_refresh_enabled": True,
-    "refresh_buffer_minutes": 15,  # Increased default buffer to 15 mins for safety
+    "refresh_buffer_minutes": 15,
 }
 
-# Global state for devices and status
 latest_devices = []
 latest_status = {}
 last_status_update = 0
 
-# Initialize scheduler
 scheduler = AsyncIOScheduler()
 
 
@@ -77,7 +69,6 @@ class TokenRefreshError(Exception):
 
 
 def load_config():
-    """Load configuration from file"""
     global config_data
     if CONFIG_FILE.exists():
         try:
@@ -90,7 +81,6 @@ def load_config():
 
 
 def save_config():
-    """Save configuration to file"""
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config_data, f, indent=2)
@@ -100,7 +90,6 @@ def save_config():
 
 
 def get_token_expiration() -> Optional[datetime]:
-    """Get token expiration as datetime object (UTC)"""
     if config_data.get("token_expires_at"):
         try:
             return datetime.fromisoformat(config_data["token_expires_at"])
@@ -110,7 +99,6 @@ def get_token_expiration() -> Optional[datetime]:
 
 
 def set_token_expiration(expires_in: int):
-    """Set token expiration time using UTC timestamp to prevent drift."""
     expiration = datetime.utcnow() + timedelta(seconds=int(expires_in))
     config_data["token_expires_at"] = expiration.isoformat()
     save_config()
@@ -118,7 +106,6 @@ def set_token_expiration(expires_in: int):
 
 
 def is_token_expired() -> bool:
-    """Check if the access token is expired or about to expire using UTC."""
     expiration = get_token_expiration()
     if not expiration:
         return True
@@ -128,9 +115,6 @@ def is_token_expired() -> bool:
 
 
 async def refresh_access_token() -> bool:
-    """
-    Refresh access token safely without dropping existing refresh tokens.
-    """
     if not config_data.get("refresh_token"):
         logger.error("No refresh token available in configuration")
         return False
@@ -160,16 +144,13 @@ async def refresh_access_token() -> bool:
             if response.status_code == 200:
                 token_data = response.json()
                 
-                # Update access token
                 if token_data.get("access_token"):
                     config_data["access_token"] = token_data["access_token"]
                 
-                # Only overwrite refresh_token if a valid non-empty string is explicitly returned
                 if token_data.get("refresh_token"):
                     config_data["refresh_token"] = token_data["refresh_token"]
                     logger.info("New refresh token received and updated")
                 
-                # Set expiration time (defaults to 3600 seconds if missing)
                 expires_in = token_data.get("expires_in", 3600)
                 set_token_expiration(expires_in)
                 
@@ -186,9 +167,6 @@ async def refresh_access_token() -> bool:
 
 
 async def ensure_valid_token() -> bool:
-    """
-    Ensure we have a valid access token, refresh if necessary
-    """
     if not config_data.get("access_token"):
         logger.warning("No access token available")
         return False
@@ -207,9 +185,6 @@ async def make_authenticated_request(
     json_data: Optional[Dict] = None,
     max_retries: int = 2
 ) -> httpx.Response:
-    """
-    Make an authenticated API request with automatic token refresh
-    """
     if not await ensure_valid_token():
         raise TokenRefreshError("Unable to obtain valid access token")
     
@@ -239,7 +214,6 @@ async def make_authenticated_request(
                 
                 logger.info(f"Response status: {response.status_code}")
                 
-                # If we get 401, attempt token refresh and retry request
                 if response.status_code == 401 and attempt < max_retries:
                     logger.warning(f"Got 401, attempting token refresh (attempt {attempt + 1})")
                     if await refresh_access_token():
@@ -268,7 +242,6 @@ async def make_authenticated_request(
 
 
 async def scheduled_token_check():
-    """Scheduled task to check and refresh token if needed"""
     try:
         if not config_data.get("auto_refresh_enabled", True):
             return
@@ -285,7 +258,6 @@ async def scheduled_token_check():
 
 
 async def poll_device_status():
-    """Background task to poll device status"""
     global latest_devices, latest_status, last_status_update
     
     try:
@@ -339,7 +311,6 @@ async def poll_device_status():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize on startup"""
     load_config()
     
     scheduler.add_job(
@@ -367,7 +338,6 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleanup on shutdown"""
     scheduler.shutdown()
     logger.info("Gateway shutting down")
 
@@ -389,7 +359,6 @@ class ConfigUpdate(BaseModel):
 
 @app.post("/api/config")
 async def update_config(config: ConfigUpdate):
-    """Update configuration"""
     for key, value in config.dict(exclude_unset=True).items():
         if value is not None:
             config_data[key] = value
@@ -407,7 +376,6 @@ async def update_config(config: ConfigUpdate):
 
 @app.get("/api/test")
 async def test_endpoint():
-    """Simple test endpoint"""
     return {
         "status": "ok",
         "message": "API is working",
@@ -418,7 +386,6 @@ async def test_endpoint():
 
 @app.get("/api/config")
 async def get_config():
-    """Get current configuration (without sensitive data)"""
     safe_config = config_data.copy()
     safe_config["secret_key"] = "***" if safe_config.get("secret_key") else ""
     safe_config["access_token"] = "***" if safe_config.get("access_token") else ""
@@ -438,7 +405,6 @@ async def get_config():
 
 @app.get("/api/oauth/authorize-url")
 async def get_authorize_url():
-    """Generate OAuth authorization URL"""
     oauth_url = config_data.get("oauth_base_url", "https://oauth.u-tec.com")
     client_id = config_data.get("access_key", "")
     redirect_uri = config_data.get("redirect_uri", "")
@@ -466,7 +432,6 @@ async def get_authorize_url():
 
 @app.post("/api/oauth/exchange")
 async def exchange_code(request: Request):
-    """Exchange authorization code for access token"""
     body = await request.json()
     code = body.get("code")
     
@@ -513,7 +478,6 @@ async def exchange_code(request: Request):
 
 @app.post("/api/oauth/refresh")
 async def manual_refresh_token():
-    """Manually trigger token refresh"""
     success = await refresh_access_token()
     if success:
         return {
@@ -527,7 +491,6 @@ async def manual_refresh_token():
 
 @app.get("/api/devices")
 async def get_devices():
-    """Get list of devices using correct U-tec API format"""
     try:
         api_url = config_data.get("api_base_url", "https://api.u-tec.com")
         action_path = config_data.get("action_path", "/action")
@@ -558,7 +521,6 @@ async def get_devices():
 
 @app.post("/api/status")
 async def query_status(request: Request):
-    """Query device status using correct U-tec API format"""
     try:
         body = await request.json()
         device_id = body.get("id")
@@ -598,7 +560,6 @@ async def query_status(request: Request):
 @app.post("/api/lock")
 @app.post("/lock")
 async def lock_device(request: Request):
-    """Lock a device"""
     try:
         body = await request.json()
         device_id = body.get("id")
@@ -646,7 +607,6 @@ async def lock_device(request: Request):
 @app.post("/api/unlock")
 @app.post("/unlock")
 async def unlock_device(request: Request):
-    """Unlock a device"""
     try:
         body = await request.json()
         device_id = body.get("id")
@@ -693,7 +653,6 @@ async def unlock_device(request: Request):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     expiration = get_token_expiration()
     return {
         "status": "ok",
@@ -705,7 +664,6 @@ async def health_check():
 
 @app.get("/api/status/latest")
 async def get_latest_status():
-    """Get the latest cached status"""
     return {
         "status": latest_status,
         "last_updated": last_status_update
@@ -714,7 +672,6 @@ async def get_latest_status():
 
 @app.get("/logs")
 async def get_logs():
-    """Retrieve gateway logs"""
     try:
         if LOG_FILE.exists():
             with open(LOG_FILE, 'r') as f:
@@ -728,7 +685,6 @@ async def get_logs():
 
 @app.post("/logs/clear")
 async def clear_logs():
-    """Clear gateway logs"""
     try:
         if LOG_FILE.exists():
             LOG_FILE.unlink()
@@ -739,7 +695,6 @@ async def clear_logs():
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """Serve a simple web UI"""
     expiration = get_token_expiration()
     token_info = ""
     if expiration:
@@ -789,16 +744,17 @@ async def root():
                     <div class="step-number">1</div>
                     <div class="step-title">Enter Your Credentials</div>
                 </div>
-                <label>Access Key (Client ID)</label>
-                <input type="text" id="accessKey" value="{config_data.get('access_key', '')}">
+                <p class="step-description">Enter your U-tec API developer keys below and save them before starting authorization.</p>
+                <label>Access Key (Client ID) <span style="color: #e74c3c;">*</span></label>
+                <input type="text" id="accessKey" value="{config_data.get('access_key', '')}" placeholder="Enter your U-tec Access Key">
                 
-                <label>Secret Key (Client Secret)</label>
-                <input type="password" id="secretKey" value="{config_data.get('secret_key', '')}">
+                <label>Secret Key (Client Secret) <span style="color: #e74c3c;">*</span></label>
+                <input type="password" id="secretKey" value="{config_data.get('secret_key', '')}" placeholder="Enter your U-tec Secret Key">
                 
-                <label>Redirect URI</label>
-                <input type="text" id="redirectUri" value="{config_data.get('redirect_uri', '')}">
+                <label>Redirect URI <span style="color: #e74c3c;">*</span></label>
+                <input type="text" id="redirectUri" value="{config_data.get('redirect_uri', '')}" placeholder="https://your-redirect-uri.com/callback">
                 
-                <button class="btn-success" onclick="saveConfig()">💾 Save Configuration</button>
+                <button class="btn-success" onclick="saveConfig()" style="margin-top: 15px;">💾 Save Configuration & Continue</button>
                 <div id="configStatus"></div>
             </div>
             
@@ -807,6 +763,7 @@ async def root():
                     <div class="step-number">2</div>
                     <div class="step-title">Authorize with U-tec</div>
                 </div>
+                <p class="step-description">Click the button to open U-tec's login page in a new tab.</p>
                 <button class="btn-primary" onclick="startOAuth()">🚀 Open U-tec Login Page</button>
                 <div id="authUrlDisplay"></div>
             </div>
@@ -816,8 +773,9 @@ async def root():
                     <div class="step-number">3</div>
                     <div class="step-title">Copy the Redirect URL</div>
                 </div>
-                <textarea id="redirectUrl" placeholder="Paste the entire URL from browser address bar..."></textarea>
-                <button class="btn-success" onclick="extractAndExchangeCode()">🔑 Submit Code</button>
+                <p class="step-description">After logging in, copy the full URL from your browser address bar and paste it below.</p>
+                <textarea id="redirectUrl" placeholder="Paste full URL here (e.g. https://your-redirect-uri.com/callback?code=...)"></textarea>
+                <button class="btn-success" onclick="extractAndExchangeCode()">🔑 Submit Code & Complete Setup</button>
                 <div id="tokenDisplay"></div>
             </div>
             
@@ -827,39 +785,80 @@ async def root():
                     <div class="step-title">Setup Complete!</div>
                 </div>
                 <div class="status status-success">
-                    <strong>🎉 Success!</strong> Gateway authenticated.
+                    <strong>🎉 Success!</strong> Gateway authenticated. Tokens will automatically refresh in the background.
                 </div>
             </div>
         </div>
         <script>
             async function saveConfig() {{
+                const statusDiv = document.getElementById('configStatus');
+                statusDiv.innerHTML = '<div class="status status-info">💾 Saving...</div>';
                 const config = {{
                     access_key: document.getElementById('accessKey').value.trim(),
                     secret_key: document.getElementById('secretKey').value.trim(),
                     redirect_uri: document.getElementById('redirectUri').value.trim()
                 }};
-                await fetch('/api/config', {{
+                
+                if (!config.access_key || !config.secret_key || !config.redirect_uri) {{
+                    statusDiv.innerHTML = '<div class="status status-error">❌ All fields are required.</div>';
+                    return;
+                }}
+                
+                const res = await fetch('/api/config', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify(config)
                 }});
-                alert('Saved!');
+                
+                if (res.ok) {{
+                    statusDiv.innerHTML = '<div class="status status-success">✅ Configuration saved! Now proceed to Step 2.</div>';
+                }} else {{
+                    statusDiv.innerHTML = '<div class="status status-error">❌ Failed to save configuration.</div>';
+                }}
             }}
             async function startOAuth() {{
+                const display = document.getElementById('authUrlDisplay');
+                display.innerHTML = '<div class="status status-info">⏳ Generating authorization URL...</div>';
                 const res = await fetch('/api/oauth/authorize-url');
                 const data = await res.json();
-                if(data.url) window.open(data.url, '_blank');
+                
+                if (!res.ok) {{
+                    display.innerHTML = `<div class="status status-error">❌ ${{data.detail || 'Save credentials in Step 1 first!'}}</div>`;
+                    return;
+                }}
+                
+                display.innerHTML = `<div class="status status-success">✅ Opening login page... <a href="${{data.url}}" target="_blank">Click here if it doesn't open</a></div>`;
+                window.open(data.url, '_blank');
             }}
             async function extractAndExchangeCode() {{
+                const displayDiv = document.getElementById('tokenDisplay');
                 const redirectUrl = document.getElementById('redirectUrl').value.trim();
-                const url = new URL(redirectUrl);
-                const code = url.searchParams.get('code');
-                const res = await fetch('/api/oauth/exchange', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ code }})
-                }});
-                if(res.ok) alert('Authentication complete!');
+                if (!redirectUrl) {{
+                    displayDiv.innerHTML = '<div class="status status-error">❌ Paste the redirect URL first!</div>';
+                    return;
+                }}
+                try {{
+                    const url = new URL(redirectUrl);
+                    const code = url.searchParams.get('code');
+                    if (!code) {{
+                        displayDiv.innerHTML = '<div class="status status-error">❌ No code found in URL.</div>';
+                        return;
+                    }}
+                    const res = await fetch('/api/oauth/exchange', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ code: code }})
+                    }});
+                    const data = await res.json();
+                    if (res.ok) {{
+                        displayDiv.innerHTML = '<div class="status status-success">🎉 Success! Connected to U-tec.</div>';
+                        document.getElementById('step4').classList.remove('hidden');
+                    }} else {{
+                        displayDiv.innerHTML = `<div class="status status-error">❌ Exchange failed: ${{data.detail}}</div>`;
+                    }}
+                }} catch(e) {{
+                    displayDiv.innerHTML = `<div class="status status-error">❌ Error: ${{e.message}}</div>`;
+                }}
             }}
         </script>
     </body>
