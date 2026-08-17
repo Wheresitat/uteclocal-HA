@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+import asyncio
 
 import aiohttp
-import async_timeout
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -38,13 +38,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host = user_input[CONF_HOST].rstrip("/")
 
-            # Test connection to local gateway health endpoint
             try:
                 session = async_get_clientsession(self.hass)
-                async with async_timeout.timeout(10):
+                async with asyncio.timeout(10):
                     response = await session.get(f"{host}/health")
                     if response.status == 200:
-                        # Ensure host is not already configured in Home Assistant
                         await self.async_set_unique_id(host)
                         self._abort_if_unique_id_configured()
 
@@ -53,13 +51,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             data={CONF_HOST: host},
                         )
                     else:
-                        _LOGGER.error(f"Gateway returned HTTP status {response.status}")
+                        _LOGGER.error("Gateway returned status %s", response.status)
                         errors["base"] = "cannot_connect"
-            except aiohttp.ClientError as err:
-                _LOGGER.error(f"Cannot connect to gateway at {host}: {err}")
+            except (aiohttp.ClientError, TimeoutError) as err:
+                _LOGGER.error("Cannot connect to gateway at %s: %s", host, err)
                 errors["base"] = "cannot_connect"
-            except Exception as err:  # pylint: disable=broad-except
-                _LOGGER.exception(f"Unexpected exception connecting to gateway: {err}")
+            except Exception as err:
+                _LOGGER.exception("Unexpected error in config flow: %s", err)
                 errors["base"] = "unknown"
 
         return self.async_show_form(
