@@ -1,6 +1,9 @@
 """
-Enhanced U-tec Gateway with Automatic Token Refresh
-Full version with complete Web UI setup steps.
+Enhanced U-tec Gateway with Automatic Token Refresh & Extended Logging
+Includes:
+- Device Management UI & Status Controls
+- Direct Health Check with Expiry Telemetry
+- Verbose Logging for Home Assistant API calls & Auto-Renew execution
 """
 
 import json
@@ -15,7 +18,6 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -26,7 +28,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uteclocal-gateway")
 
 # Configuration file path
 DATA_DIR = Path("/data")
@@ -75,7 +77,7 @@ def load_config():
             with open(CONFIG_FILE, 'r') as f:
                 loaded = json.load(f)
                 config_data.update(loaded)
-            logger.info("Configuration loaded successfully")
+            logger.info("Configuration loaded successfully from /data/config.json")
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
 
@@ -84,7 +86,7 @@ def save_config():
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config_data, f, indent=2)
-        logger.info("Configuration saved successfully")
+        logger.info("Configuration saved to /data/config.json")
     except Exception as e:
         logger.error(f"Failed to save config: {e}")
 
@@ -102,7 +104,7 @@ def set_token_expiration(expires_in: int):
     expiration = datetime.utcnow() + timedelta(seconds=int(expires_in))
     config_data["token_expires_at"] = expiration.isoformat()
     save_config()
-    logger.info(f"Token will expire at (UTC): {expiration}")
+    logger.info(f"Token expiration updated. Will expire at (UTC): {expiration}")
 
 
 def is_token_expired() -> bool:
@@ -116,10 +118,10 @@ def is_token_expired() -> bool:
 
 async def refresh_access_token() -> bool:
     if not config_data.get("refresh_token"):
-        logger.error("No refresh token available in configuration")
+        logger.error("[AUTO-RENEW] Failed: No refresh token available in config")
         return False
     
-    logger.info("Attempting to refresh access token...")
+    logger.info("🔄 [AUTO-RENEW] Initiating background OAuth token refresh with U-tec...")
     
     try:
         oauth_url = config_data.get("oauth_base_url", "https://oauth.u-tec.com")
@@ -139,7 +141,7 @@ async def refresh_access_token() -> bool:
                 headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
             
-            logger.info(f"Token refresh response status: {response.status_code}")
+            logger.info(f"🔄 [AUTO-RENEW] U-tec token endpoint response status: {response.status_code}")
             
             if response.status_code == 200:
                 token_data = response.json()
@@ -149,30 +151,30 @@ async def refresh_access_token() -> bool:
                 
                 if token_data.get("refresh_token"):
                     config_data["refresh_token"] = token_data["refresh_token"]
-                    logger.info("New refresh token received and updated")
+                    logger.info("🔄 [AUTO-RENEW] New refresh token saved")
                 
                 expires_in = token_data.get("expires_in", 3600)
                 set_token_expiration(expires_in)
                 
                 save_config()
-                logger.info("Access token refreshed successfully")
+                logger.info("✅ [AUTO-RENEW SUCCESS] Access token renewed successfully!")
                 return True
             else:
-                logger.error(f"Token refresh failed (HTTP {response.status_code}): {response.text}")
+                logger.error(f"❌ [AUTO-RENEW FAILED] HTTP {response.status_code}: {response.text}")
                 return False
                 
     except Exception as e:
-        logger.error(f"Error refreshing token: {e}", exc_info=True)
+        logger.error(f"❌ [AUTO-RENEW ERROR] Exception during token refresh: {e}", exc_info=True)
         return False
 
 
 async def ensure_valid_token() -> bool:
     if not config_data.get("access_token"):
-        logger.warning("No access token available")
+        logger.warning("[AUTH] No access token configured.")
         return False
     
     if is_token_expired():
-        logger.info("Token expired or expiring soon, attempting refresh...")
+        logger.info("[AUTH] Token expired or buffer limit reached. Triggering refresh...")
         return await refresh_access_token()
     
     return True
@@ -200,8 +202,6 @@ async def make_authenticated_request(
         json_data["accessKey"] = config_data.get("access_key", "")
         json_data["secretKey"] = config_data.get("secret_key", "")
     
-    logger.info(f"Making {method} request to {url}")
-    
     async with httpx.AsyncClient(timeout=30.0) as client:
         for attempt in range(max_retries + 1):
             try:
@@ -212,10 +212,8 @@ async def make_authenticated_request(
                 else:
                     raise ValueError(f"Unsupported HTTP method: {method}")
                 
-                logger.info(f"Response status: {response.status_code}")
-                
                 if response.status_code == 401 and attempt < max_retries:
-                    logger.warning(f"Got 401, attempting token refresh (attempt {attempt + 1})")
+                    logger.warning(f"[API 401] Token rejected on attempt {attempt + 1}. Attempting instant refresh...")
                     if await refresh_access_token():
                         request_headers["Authorization"] = f"Bearer {config_data['access_token']}"
                         if json_data:
@@ -227,13 +225,13 @@ async def make_authenticated_request(
                 
             except httpx.TimeoutException:
                 if attempt < max_retries:
-                    logger.warning(f"Request timeout, retrying... (attempt {attempt + 1})")
+                    logger.warning(f"[API TIMEOUT] Request timed out. Retrying attempt {attempt + 1}...")
                     await asyncio.sleep(2 ** attempt)
                 else:
                     raise
             except Exception as e:
                 if attempt < max_retries:
-                    logger.warning(f"Request failed: {e}, retrying... (attempt {attempt + 1})")
+                    logger.warning(f"[API ERROR] Request failed ({e}). Retrying attempt {attempt + 1}...")
                     await asyncio.sleep(2 ** attempt)
                 else:
                     raise
@@ -242,27 +240,30 @@ async def make_authenticated_request(
 
 
 async def scheduled_token_check():
+    """Background task to check and refresh token if needed"""
     try:
         if not config_data.get("auto_refresh_enabled", True):
             return
         
+        expiration = get_token_expiration()
+        time_left = (expiration - datetime.utcnow()) if expiration else "Unknown"
+        logger.info(f"⏰ [SCHEDULED CHECK] Verification running. Token valid. Time remaining until expiry: {time_left}")
+        
         if is_token_expired():
-            logger.info("Scheduled token refresh triggered")
+            logger.info("⏰ [SCHEDULED CHECK] Token near expiration. Initiating auto-renew...")
             success = await refresh_access_token()
             if success:
-                logger.info("Scheduled token refresh successful")
+                logger.info("✅ [SCHEDULED CHECK] Auto-renew completed successfully.")
             else:
-                logger.error("Scheduled token refresh failed")
+                logger.error("❌ [SCHEDULED CHECK] Auto-renew failed.")
     except Exception as e:
         logger.error(f"Error in scheduled token check: {e}")
 
 
 async def poll_device_status():
     global latest_devices, latest_status, last_status_update
-    
     try:
         if not await ensure_valid_token():
-            logger.warning("Skipping status poll - no valid token")
             return
         
         api_url = config_data.get("api_base_url", "https://api.u-tec.com")
@@ -303,10 +304,9 @@ async def poll_device_status():
                 if status_response.status_code == 200:
                     latest_status = status_response.json()
                     last_status_update = int(datetime.utcnow().timestamp())
-                    logger.info(f"Status poll successful - {len(devices)} devices")
         
     except Exception as e:
-        logger.error(f"Error in status poll: {e}")
+        logger.error(f"Error in background status poll: {e}")
 
 
 @app.on_event("startup")
@@ -329,11 +329,7 @@ async def startup_event():
     )
     
     scheduler.start()
-    logger.info("Gateway started with automatic token refresh enabled")
-    
-    expiration = get_token_expiration()
-    if expiration:
-        logger.info(f"Current token expires at (UTC): {expiration}")
+    logger.info("🚀 Gateway online. Auto-refresh scheduler running (checks every 5 mins).")
 
 
 @app.on_event("shutdown")
@@ -362,26 +358,8 @@ async def update_config(config: ConfigUpdate):
     for key, value in config.dict(exclude_unset=True).items():
         if value is not None:
             config_data[key] = value
-    
     save_config()
-    
-    if config.status_poll_interval is not None:
-        scheduler.reschedule_job(
-            'status_poll',
-            trigger=IntervalTrigger(seconds=config.status_poll_interval)
-        )
-    
     return {"status": "ok", "message": "Configuration updated"}
-
-
-@app.get("/api/test")
-async def test_endpoint():
-    return {
-        "status": "ok",
-        "message": "API is working",
-        "config_loaded": bool(config_data.get("access_key")),
-        "has_tokens": bool(config_data.get("access_token"))
-    }
 
 
 @app.get("/api/config")
@@ -399,7 +377,6 @@ async def get_config():
         "is_expired": is_token_expired(),
         "time_until_expiry": str(expiration - datetime.utcnow()) if expiration else None
     }
-    
     return safe_config
 
 
@@ -411,22 +388,15 @@ async def get_authorize_url():
     scope = config_data.get("scope", "openapi")
     
     if not client_id or not redirect_uri:
-        raise HTTPException(
-            status_code=400,
-            detail="Please configure access_key and redirect_uri first."
-        )
-    
-    encoded_redirect = quote(redirect_uri, safe='')
-    encoded_scope = quote(scope, safe='')
+        raise HTTPException(status_code=400, detail="Configure access_key and redirect_uri first.")
     
     auth_url = (
         f"{oauth_url}/authorize?"
         f"response_type=code&"
         f"client_id={client_id}&"
-        f"redirect_uri={encoded_redirect}&"
-        f"scope={encoded_scope}"
+        f"redirect_uri={quote(redirect_uri, safe='')}&"
+        f"scope={quote(scope, safe='')}"
     )
-    
     return {"url": auth_url, "success": True}
 
 
@@ -465,9 +435,8 @@ async def exchange_code(request: Request):
                 
                 expires_in = token_data.get("expires_in", 3600)
                 set_token_expiration(expires_in)
-                
                 save_config()
-                logger.info("OAuth tokens obtained successfully")
+                logger.info("🔑 [OAUTH] Initial authorization successful. Tokens stored.")
                 return {"status": "ok", "message": "Tokens obtained", "data": token_data}
             else:
                 raise HTTPException(status_code=response.status_code, detail=response.text)
@@ -478,6 +447,7 @@ async def exchange_code(request: Request):
 
 @app.post("/api/oauth/refresh")
 async def manual_refresh_token():
+    logger.info("👤 [MANUAL REFRESH] User requested manual token refresh via Web UI.")
     success = await refresh_access_token()
     if success:
         return {
@@ -490,7 +460,10 @@ async def manual_refresh_token():
 
 
 @app.get("/api/devices")
-async def get_devices():
+async def get_devices(request: Request):
+    client_ip = request.client.host if request.client else "Unknown"
+    logger.info(f"📡 [HA POLL] GET /api/devices from Home Assistant ({client_ip})")
+    
     try:
         api_url = config_data.get("api_base_url", "https://api.u-tec.com")
         action_path = config_data.get("action_path", "/action")
@@ -507,10 +480,13 @@ async def get_devices():
         }
         
         response = await make_authenticated_request("POST", endpoint, json_data=payload)
-        
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            device_count = len(data.get("payload", {}).get("devices", []))
+            logger.info(f"✅ [HA POLL SUCCESS] Returned {device_count} devices to Home Assistant.")
+            return data
         else:
+            logger.error(f"❌ [HA POLL FAILED] U-tec API HTTP {response.status_code}: {response.text}")
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except TokenRefreshError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -521,9 +497,11 @@ async def get_devices():
 
 @app.post("/api/status")
 async def query_status(request: Request):
+    client_ip = request.client.host if request.client else "Unknown"
     try:
         body = await request.json()
         device_id = body.get("id")
+        logger.info(f"📊 [HA POLL] POST /api/status for device {device_id} from {client_ip}")
         
         if not device_id:
             raise HTTPException(status_code=400, detail="Device ID required")
@@ -545,7 +523,6 @@ async def query_status(request: Request):
         }
         
         response = await make_authenticated_request("POST", endpoint, json_data=payload)
-        
         if response.status_code == 200:
             return response.json()
         else:
@@ -563,6 +540,7 @@ async def lock_device(request: Request):
     try:
         body = await request.json()
         device_id = body.get("id")
+        logger.info(f"🔒 [HA COMMAND] Lock request received for device {device_id}")
         
         if not device_id:
             raise HTTPException(status_code=400, detail="Device ID required")
@@ -592,13 +570,11 @@ async def lock_device(request: Request):
         }
         
         response = await make_authenticated_request("POST", endpoint, json_data=payload)
-        
         if response.status_code == 200:
+            logger.info(f"✅ [HA COMMAND SUCCESS] Lock command executed for {device_id}")
             return response.json()
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
-    except TokenRefreshError as e:
-        raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
         logger.error(f"Error locking device: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -610,6 +586,7 @@ async def unlock_device(request: Request):
     try:
         body = await request.json()
         device_id = body.get("id")
+        logger.info(f"🔓 [HA COMMAND] Unlock request received for device {device_id}")
         
         if not device_id:
             raise HTTPException(status_code=400, detail="Device ID required")
@@ -639,13 +616,11 @@ async def unlock_device(request: Request):
         }
         
         response = await make_authenticated_request("POST", endpoint, json_data=payload)
-        
         if response.status_code == 200:
+            logger.info(f"✅ [HA COMMAND SUCCESS] Unlock command executed for {device_id}")
             return response.json()
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
-    except TokenRefreshError as e:
-        raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
         logger.error(f"Error unlocking device: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -653,20 +628,18 @@ async def unlock_device(request: Request):
 
 @app.get("/health")
 async def health_check():
+    """Health check endpoint used by Docker & HA"""
     expiration = get_token_expiration()
+    expired = is_token_expired()
+    time_left = str(expiration - datetime.utcnow()) if expiration else "None"
+    
     return {
         "status": "ok",
-        "token_valid": not is_token_expired(),
-        "token_expires_at": expiration.isoformat() if expiration else None,
+        "health": "healthy" if not expired else "token_expiring_or_missing",
+        "token_valid": not expired,
+        "token_expires_at_utc": expiration.isoformat() if expiration else None,
+        "time_until_expiry": time_left,
         "auto_refresh_enabled": config_data.get("auto_refresh_enabled", True)
-    }
-
-
-@app.get("/api/status/latest")
-async def get_latest_status():
-    return {
-        "status": latest_status,
-        "last_updated": last_status_update
     }
 
 
@@ -693,172 +666,118 @@ async def clear_logs():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Web UI with full Device Control & Diagnostics
 @app.get("/", response_class=HTMLResponse)
 async def root():
     expiration = get_token_expiration()
-    token_info = ""
-    if expiration:
-        time_left = expiration - datetime.utcnow()
-        token_info = f"Token expires in: {time_left}"
+    time_left = str(expiration - datetime.utcnow()) if expiration else "Not configured"
     
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>U-tec Gateway Setup</title>
+        <title>U-tec Local Gateway</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
             * {{ box-sizing: border-box; }}
             body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; margin: 0; padding: 20px; background: #f5f7fa; color: #333; }}
             .container {{ max-width: 900px; margin: 0 auto; }}
-            h1 {{ color: #2c3e50; margin-bottom: 10px; }}
-            .subtitle {{ color: #7f8c8d; margin-bottom: 30px; }}
-            .step {{ background: white; margin: 20px 0; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-            .step-header {{ display: flex; align-items: center; margin-bottom: 15px; }}
-            .step-number {{ background: #3498db; color: white; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0; }}
-            .step-title {{ font-size: 20px; font-weight: 600; color: #2c3e50; }}
-            .step-description {{ color: #7f8c8d; margin-bottom: 15px; line-height: 1.6; }}
-            .status {{ padding: 12px 16px; border-radius: 6px; margin: 15px 0; border-left: 4px solid; }}
-            .status-success {{ background: #d4edda; border-color: #28a745; color: #155724; }}
-            .status-error {{ background: #f8d7da; border-color: #dc3545; color: #721c24; }}
-            .status-info {{ background: #d1ecf1; border-color: #17a2b8; color: #0c5460; }}
-            button {{ padding: 12px 24px; border: none; border-radius: 6px; font-size: 15px; font-weight: 500; cursor: pointer; transition: all 0.2s; margin: 5px 5px 5px 0; }}
-            button:hover {{ transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }}
+            h1 {{ color: #2c3e50; margin-bottom: 5px; }}
+            .subtitle {{ color: #7f8c8d; margin-bottom: 25px; }}
+            .card {{ background: white; margin: 15px 0; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .status-box {{ padding: 12px; border-radius: 6px; margin: 10px 0; font-weight: 500; }}
+            .success {{ background: #d4edda; color: #155724; }}
+            .warning {{ background: #fff3cd; color: #856404; }}
+            button {{ padding: 10px 18px; border: none; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; margin: 4px; }}
             .btn-primary {{ background: #3498db; color: white; }}
             .btn-success {{ background: #28a745; color: white; }}
             .btn-secondary {{ background: #6c757d; color: white; }}
-            input, textarea {{ width: 100%; padding: 10px 12px; border: 2px solid #e1e8ed; border-radius: 6px; font-size: 14px; margin: 8px 0; }}
-            pre {{ background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; }}
-            .completed {{ opacity: 0.7; }}
-            .completed .step-number {{ background: #28a745; }}
-            .hidden {{ display: none; }}
+            input, textarea {{ width: 100%; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; margin: 6px 0; }}
+            pre {{ background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; max-height: 250px; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔐 U-tec Gateway Setup</h1>
-            <p class="subtitle">First-time setup & authentication</p>
+            <h1>🔐 U-tec Local Gateway</h1>
+            <p class="subtitle">Home Assistant Local Bridge & OAuth Auto-Renew Controller</p>
             
-            <div class="step" id="step1">
-                <div class="step-header">
-                    <div class="step-number">1</div>
-                    <div class="step-title">Enter Your Credentials</div>
+            <div class="card">
+                <h3>📊 Gateway Health & Verification</h3>
+                <div class="status-box {'success' if not is_token_expired() else 'warning'}">
+                    Token Status: {'✅ Active & Auto-Renewing' if not is_token_expired() else '⚠️ Expired / Authorization Needed'}
                 </div>
-                <p class="step-description">Enter your U-tec API developer keys below and save them before starting authorization.</p>
-                <label>Access Key (Client ID) <span style="color: #e74c3c;">*</span></label>
-                <input type="text" id="accessKey" value="{config_data.get('access_key', '')}" placeholder="Enter your U-tec Access Key">
-                
-                <label>Secret Key (Client Secret) <span style="color: #e74c3c;">*</span></label>
-                <input type="password" id="secretKey" value="{config_data.get('secret_key', '')}" placeholder="Enter your U-tec Secret Key">
-                
-                <label>Redirect URI <span style="color: #e74c3c;">*</span></label>
-                <input type="text" id="redirectUri" value="{config_data.get('redirect_uri', '')}" placeholder="https://your-redirect-uri.com/callback">
-                
-                <button class="btn-success" onclick="saveConfig()" style="margin-top: 15px;">💾 Save Configuration & Continue</button>
-                <div id="configStatus"></div>
+                <p><strong>Time Remaining until Auto-Renew:</strong> {time_left}</p>
+                <button class="btn-secondary" onclick="checkHealth()">❤️ Test /health Endpoint</button>
+                <button class="btn-secondary" onclick="manualRefresh()">🔄 Force Manual OAuth Refresh</button>
             </div>
             
-            <div class="step" id="step2">
-                <div class="step-header">
-                    <div class="step-number">2</div>
-                    <div class="step-title">Authorize with U-tec</div>
+            <div class="card">
+                <h3>📱 Device Management & Controls</h3>
+                <button class="btn-primary" onclick="loadDevices()">🔄 Discover Devices</button>
+                <pre id="deviceOutput">Click "Discover Devices" to query U-tec account locks...</pre>
+                
+                <div style="margin-top: 15px;">
+                    <label>Target Lock Device ID:</label>
+                    <input type="text" id="targetId" placeholder="Paste Device ID here">
+                    <button class="btn-success" onclick="controlLock('lock')">🔒 Test Lock</button>
+                    <button class="btn-primary" onclick="controlLock('unlock')">🔓 Test Unlock</button>
                 </div>
-                <p class="step-description">Click the button to open U-tec's login page in a new tab.</p>
-                <button class="btn-primary" onclick="startOAuth()">🚀 Open U-tec Login Page</button>
-                <div id="authUrlDisplay"></div>
+                <div id="cmdOutput" style="margin-top: 10px;"></div>
             </div>
             
-            <div class="step" id="step3">
-                <div class="step-header">
-                    <div class="step-number">3</div>
-                    <div class="step-title">Copy the Redirect URL</div>
-                </div>
-                <p class="step-description">After logging in, copy the full URL from your browser address bar and paste it below.</p>
-                <textarea id="redirectUrl" placeholder="Paste full URL here (e.g. https://your-redirect-uri.com/callback?code=...)"></textarea>
-                <button class="btn-success" onclick="extractAndExchangeCode()">🔑 Submit Code & Complete Setup</button>
-                <div id="tokenDisplay"></div>
-            </div>
-            
-            <div class="step completed hidden" id="step4">
-                <div class="step-header">
-                    <div class="step-number">✓</div>
-                    <div class="step-title">Setup Complete!</div>
-                </div>
-                <div class="status status-success">
-                    <strong>🎉 Success!</strong> Gateway authenticated. Tokens will automatically refresh in the background.
-                </div>
+            <div class="card">
+                <h3>📜 Live Gateway & Home Assistant Logs</h3>
+                <button class="btn-secondary" onclick="fetchLogs()">📄 Refresh Logs</button>
+                <button class="btn-secondary" onclick="clearLogs()">🗑️ Clear Logs</button>
+                <pre id="logOutput">Click "Refresh Logs" to view Home Assistant API activity...</pre>
             </div>
         </div>
+        
         <script>
-            async function saveConfig() {{
-                const statusDiv = document.getElementById('configStatus');
-                statusDiv.innerHTML = '<div class="status status-info">💾 Saving...</div>';
-                const config = {{
-                    access_key: document.getElementById('accessKey').value.trim(),
-                    secret_key: document.getElementById('secretKey').value.trim(),
-                    redirect_uri: document.getElementById('redirectUri').value.trim()
-                }};
-                
-                if (!config.access_key || !config.secret_key || !config.redirect_uri) {{
-                    statusDiv.innerHTML = '<div class="status status-error">❌ All fields are required.</div>';
-                    return;
-                }}
-                
-                const res = await fetch('/api/config', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify(config)
-                }});
-                
-                if (res.ok) {{
-                    statusDiv.innerHTML = '<div class="status status-success">✅ Configuration saved! Now proceed to Step 2.</div>';
-                }} else {{
-                    statusDiv.innerHTML = '<div class="status status-error">❌ Failed to save configuration.</div>';
-                }}
-            }}
-            async function startOAuth() {{
-                const display = document.getElementById('authUrlDisplay');
-                display.innerHTML = '<div class="status status-info">⏳ Generating authorization URL...</div>';
-                const res = await fetch('/api/oauth/authorize-url');
+            async function checkHealth() {{
+                const res = await fetch('/health');
                 const data = await res.json();
-                
-                if (!res.ok) {{
-                    display.innerHTML = `<div class="status status-error">❌ ${{data.detail || 'Save credentials in Step 1 first!'}}</div>`;
-                    return;
-                }}
-                
-                display.innerHTML = `<div class="status status-success">✅ Opening login page... <a href="${{data.url}}" target="_blank">Click here if it doesn't open</a></div>`;
-                window.open(data.url, '_blank');
+                alert(JSON.stringify(data, null, 2));
             }}
-            async function extractAndExchangeCode() {{
-                const displayDiv = document.getElementById('tokenDisplay');
-                const redirectUrl = document.getElementById('redirectUrl').value.trim();
-                if (!redirectUrl) {{
-                    displayDiv.innerHTML = '<div class="status status-error">❌ Paste the redirect URL first!</div>';
-                    return;
-                }}
+            async function manualRefresh() {{
+                const res = await fetch('/api/oauth/refresh', {{ method: 'POST' }});
+                const data = await res.json();
+                alert(data.message || JSON.stringify(data));
+                location.reload();
+            }}
+            async function loadDevices() {{
+                const out = document.getElementById('deviceOutput');
+                out.textContent = '⏳ Fetching devices from U-tec...';
                 try {{
-                    const url = new URL(redirectUrl);
-                    const code = url.searchParams.get('code');
-                    if (!code) {{
-                        displayDiv.innerHTML = '<div class="status status-error">❌ No code found in URL.</div>';
-                        return;
-                    }}
-                    const res = await fetch('/api/oauth/exchange', {{
+                    const res = await fetch('/api/devices');
+                    const data = await res.json();
+                    out.textContent = JSON.stringify(data, null, 2);
+                    const devs = data.payload?.devices || [];
+                    if (devs.length > 0) document.getElementById('targetId').value = devs[0].id;
+                }} catch(e) {{ out.textContent = '❌ Error: ' + e.message; }}
+            }}
+            async function controlLock(action) {{
+                const id = document.getElementById('targetId').value.trim();
+                const out = document.getElementById('cmdOutput');
+                if(!id) {{ alert('Select or enter a Device ID'); return; }}
+                out.textContent = '⏳ Sending command...';
+                try {{
+                    const res = await fetch('/api/' + action, {{
                         method: 'POST',
                         headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ code: code }})
+                        body: JSON.stringify({{ id: id }})
                     }});
                     const data = await res.json();
-                    if (res.ok) {{
-                        displayDiv.innerHTML = '<div class="status status-success">🎉 Success! Connected to U-tec.</div>';
-                        document.getElementById('step4').classList.remove('hidden');
-                    }} else {{
-                        displayDiv.innerHTML = `<div class="status status-error">❌ Exchange failed: ${{data.detail}}</div>`;
-                    }}
-                }} catch(e) {{
-                    displayDiv.innerHTML = `<div class="status status-error">❌ Error: ${{e.message}}</div>`;
-                }}
+                    out.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                }} catch(e) {{ out.textContent = '❌ Error: ' + e.message; }}
+            }}
+            async function fetchLogs() {{
+                const res = await fetch('/logs');
+                document.getElementById('logOutput').textContent = await res.text();
+            }}
+            async function clearLogs() {{
+                await fetch('/logs/clear', {{ method: 'POST' }});
+                document.getElementById('logOutput').textContent = 'Logs cleared.';
             }}
         </script>
     </body>
